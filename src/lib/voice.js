@@ -1,6 +1,7 @@
 export class GermanVoice {
   constructor() {
     this.synth = window.speechSynthesis
+    this._playbackToken = 0
     this.currentUtterance = null
     this.voices = []
     this.selectedVoiceURI = localStorage.getItem('dr_voice_uri') || null
@@ -46,29 +47,54 @@ export class GermanVoice {
     localStorage.setItem('dr_speech_rate', rate.toString())
   }
 
-  speak(text, { onEnd } = {}) {
-    this.stop()
-    const chunks = this._chunkBySentence(text, 220)
-    let i = 0
+  /** Same chunking as full-chapter speak(); use for snapshot + resume. */
+  getSpeakChunks(text) {
+    return this._chunkBySentence(text, 220)
+  }
 
-    const speakNext = () => {
-      if (i >= chunks.length) {
+  /**
+   * Speak pre-split chunks from startIndex. Cancels any prior playback.
+   * onUtteranceStart(idx) — when chunk idx begins (for pause/resume cursor).
+   * onAfterUtterance(idx) — after chunk idx finishes (next index is idx + 1).
+   */
+  speakChunks(chunks, startIndex = 0, { onEnd, onUtteranceStart, onAfterUtterance } = {}) {
+    if (!chunks?.length) {
+      onEnd?.()
+      this.onEnd?.()
+      return
+    }
+    this.stop()
+    const token = this._playbackToken
+
+    const speakAt = (at) => {
+      if (token !== this._playbackToken) return
+      if (at >= chunks.length) {
         onEnd?.()
         this.onEnd?.()
         return
       }
-      const chunk = chunks[i]
+      onUtteranceStart?.(at)
+      const chunk = chunks[at]
       const u = new SpeechSynthesisUtterance(chunk)
       u.voice = this.selectedVoice
       u.lang = 'de-DE'
       u.rate = this.rate
-      u.onend = () => { i++; speakNext() }
       u.onboundary = (e) => this.onBoundary?.(e.charIndex, e.charLength)
+      u.onend = () => {
+        if (token !== this._playbackToken) return
+        onAfterUtterance?.(at)
+        speakAt(at + 1)
+      }
       this.currentUtterance = u
       this.synth.speak(u)
-      i++
     }
-    speakNext()
+
+    speakAt(Math.max(0, startIndex))
+  }
+
+  speak(text, { onEnd } = {}) {
+    const chunks = this._chunkBySentence(text, 220)
+    this.speakChunks(chunks, 0, { onEnd })
   }
 
   speakSentence(sentence, { onEnd } = {}) {
@@ -83,7 +109,7 @@ export class GermanVoice {
   }
 
   speakWord(word) {
-    this.synth.cancel()
+    this.stop()
     const u = new SpeechSynthesisUtterance(word)
     u.voice = this.selectedVoice
     u.lang = 'de-DE'
@@ -92,6 +118,7 @@ export class GermanVoice {
   }
 
   stop() {
+    this._playbackToken++
     this.synth.cancel()
     this.currentUtterance = null
   }

@@ -88,6 +88,14 @@ export default function FlashCard({ card, mode = 'de_to_en', isFlipped, onFlip }
               </button>
             </div>
             <div className="text-xl text-brand-300 font-medium">{word.translation}</div>
+            {Array.isArray(word.variants) && word.variants.length > 0 && (
+              <div className="mt-3 text-left w-full max-w-sm mx-auto rounded-xl bg-surface-800/80 border border-surface-700 px-3 py-2">
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Forms</div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {[word.german, ...word.variants].filter(Boolean).join(', ')}
+                </p>
+              </div>
+            )}
             {word.plural && (
               <div className="text-sm text-slate-500 mt-0.5">Plural: {word.plural}</div>
             )}

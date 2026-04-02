@@ -10,6 +10,14 @@ function getXPColor(xp) {
   return 'bg-green-500'
 }
 
+function getPassiveOverlay(minutes) {
+  if (minutes <= 0) return 'opacity-0'
+  if (minutes < 30) return 'opacity-20'
+  if (minutes < 60) return 'opacity-40'
+  if (minutes < 90) return 'opacity-60'
+  return 'opacity-80'
+}
+
 export default function WeekHeatmap({ sessions = [] }) {
   // sessions: array of 7 items, index 0 = 6 days ago, index 6 = today
   const today = new Date()
@@ -40,6 +48,7 @@ export default function WeekHeatmap({ sessions = [] }) {
           const session = sessionMap[day.date]
           const xp = session?.xpEarned || 0
           const reviews = session?.flashcardsReviewed || 0
+          const passiveMinutes = session?.passiveMinutes || 0
 
           return (
             <div key={day.date} className="flex flex-col items-center gap-1.5 group relative">
@@ -48,11 +57,13 @@ export default function WeekHeatmap({ sessions = [] }) {
                 animate={{ scale: 1 }}
                 transition={{ delay: 0.2 + i * 0.04 }}
                 className={clsx(
-                  'w-full aspect-square rounded-lg transition-all duration-200 cursor-default',
+                  'w-full aspect-square rounded-lg transition-all duration-200 cursor-default relative overflow-hidden',
                   getXPColor(xp),
                   day.isToday && 'ring-2 ring-brand-400 ring-offset-1 ring-offset-surface-950'
                 )}
-              />
+              >
+                <div className={clsx('absolute inset-0 bg-blue-400', getPassiveOverlay(passiveMinutes))} />
+              </motion.div>
               <span className={clsx(
                 'text-[10px] font-medium',
                 day.isToday ? 'text-brand-400' : 'text-slate-600'
@@ -68,6 +79,7 @@ export default function WeekHeatmap({ sessions = [] }) {
                 <div className="font-semibold text-white">{day.label}</div>
                 <div className="text-slate-400">{xp} XP</div>
                 {reviews > 0 && <div className="text-slate-500">{reviews} reviews</div>}
+                {passiveMinutes > 0 && <div className="text-blue-300">{(passiveMinutes / 60).toFixed(1)}h passive</div>}
               </div>
             </div>
           )

@@ -1,111 +1,83 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 
-function todayStr() {
-  return new Date().toISOString().split('T')[0]
-}
-
-function storageKeyFor(pageKey) {
-  return `dr_timer_${pageKey}_${todayStr()}`
-}
-
-export function clearTimerStorage(pageKey) {
-  try {
-    localStorage.removeItem(storageKeyFor(pageKey))
-  } catch { /* ignore */ }
+/** @deprecated No-op; legacy dr_timer_* keys are cleared at app startup. */
+export function clearTimerStorage() {
+  /* manual timers only — no localStorage */
 }
 
 /**
+ * Manual study timer: stopped by default, no localStorage.
  * @param {object} opts
- * @param {string} opts.pageKey
+ * @param {string} opts.pageKey — resets when this changes
  * @param {number} opts.goalMinutes
- * @param {(elapsedSeconds: number) => void} [opts.onPersist] — called every 5s and on unmount
+ * @param {(minutes: number) => void | Promise<void>} [opts.onSaveMinutes] — Stop & Save only
  */
-export function useTimer({ pageKey, goalMinutes, onPersist }) {
+export function useTimer({ pageKey, goalMinutes, onSaveMinutes }) {
   const goalSeconds = Math.max(1, goalMinutes * 60)
-  const key = storageKeyFor(pageKey)
-
+  const [timerState, setTimerState] = useState('stopped') // 'stopped' | 'running' | 'paused'
   const [elapsed, setElapsed] = useState(0)
-  const [isRunning, setIsRunning] = useState(true)
+  const intervalRef = useRef(null)
   const elapsedRef = useRef(0)
-  const persistRef = useRef(onPersist)
-  persistRef.current = onPersist
+  const onSaveRef = useRef(onSaveMinutes)
+  onSaveRef.current = onSaveMinutes
 
   useEffect(() => {
     elapsedRef.current = elapsed
   }, [elapsed])
 
-  // Restore on mount / pageKey change
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(key)
-      if (raw) {
-        const parsed = JSON.parse(raw)
-        if (typeof parsed.elapsed === 'number' && parsed.elapsed >= 0) {
-          setElapsed(parsed.elapsed)
-          elapsedRef.current = parsed.elapsed
-        }
-      } else {
-        setElapsed(0)
-        elapsedRef.current = 0
-      }
-    } catch {
-      setElapsed(0)
+  const clearTick = useCallback(() => {
+    if (intervalRef.current != null) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
     }
-    setIsRunning(true)
-  }, [key])
+  }, [])
 
-  const persist = useCallback(
-    (seconds) => {
-      try {
-        localStorage.setItem(key, JSON.stringify({ elapsed: seconds }))
-      } catch { /* ignore */ }
-      persistRef.current?.(seconds)
-    },
-    [key]
-  )
-
-  // Tick
   useEffect(() => {
-    if (!isRunning) return
-    const id = setInterval(() => {
-      setElapsed(e => e + 1)
-    }, 1000)
-    return () => clearInterval(id)
-  }, [isRunning])
+    return () => clearTick()
+  }, [clearTick])
 
-  // Persist every 5s
   useEffect(() => {
-    const id = setInterval(() => {
-      persist(elapsedRef.current)
-    }, 5000)
-    return () => clearInterval(id)
-  }, [key, persist])
-
-  // Final persist on unmount
-  useEffect(() => {
-    return () => {
-      persist(elapsedRef.current)
-    }
-  }, [key, persist])
-
-  const start = useCallback(() => setIsRunning(true), [])
-  const pause = useCallback(() => setIsRunning(false), [])
-  const reset = useCallback(() => {
+    clearTick()
     setElapsed(0)
     elapsedRef.current = 0
-    persist(0)
-  }, [persist])
+    setTimerState('stopped')
+  }, [pageKey, clearTick])
+
+  const start = useCallback(() => {
+    if (intervalRef.current != null) return
+    setTimerState('running')
+    intervalRef.current = setInterval(() => {
+      setElapsed((e) => e + 1)
+    }, 1000)
+  }, [])
+
+  const pause = useCallback(() => {
+    clearTick()
+    setTimerState((s) => (s === 'running' ? 'paused' : s))
+  }, [clearTick])
+
+  const stopAndSave = useCallback(async () => {
+    clearTick()
+    const minutes = Math.floor(elapsedRef.current / 60)
+    setElapsed(0)
+    elapsedRef.current = 0
+    setTimerState('stopped')
+    if (minutes > 0) {
+      await onSaveRef.current?.(minutes)
+    }
+  }, [clearTick])
 
   const isGoalReached = elapsed >= goalSeconds
+  const isRunning = timerState === 'running'
 
   return {
     elapsed,
+    timerState,
     isRunning,
     isGoalReached,
     goalSeconds,
     start,
     pause,
-    reset,
-    persistNow: () => persist(elapsedRef.current),
+    stopAndSave,
   }
 }

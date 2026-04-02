@@ -45,6 +45,15 @@ const LEVEL_COLORS = {
   B2: 'text-green-400 bg-green-500/10',
 }
 
+function shuffleArray(arr) {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
 export default function GrammarGym() {
   const { focus: focusParam } = useParams()
   const navigate = useNavigate()
@@ -58,9 +67,22 @@ export default function GrammarGym() {
   const [error, setError] = useState('')
   const [showCoach, setShowCoach] = useState(false)
   const [chatMessages, setChatMessages] = useState([])
+  const [tutorHistory, setTutorHistory] = useState([])
   const [chatInput, setChatInput] = useState('')
   const [chatLoading, setChatLoading] = useState(false)
+  const [practiceMode, setPracticeMode] = useState('focused')
+  const [knownWords, setKnownWords] = useState(0)
   const chatRef = useRef(null)
+
+  const INTERLEAVED_TOPICS = ['dative', 'konjunktiv_II', 'passive', 'word_order', 'relative_clauses', 'prepositions']
+
+  useEffect(() => {
+    getAllWords().then(words => {
+      setKnownWords(words.length)
+      if (words.length > 2000) setPracticeMode('interleaved')
+      else if (words.length < 1000) setPracticeMode('focused')
+    })
+  }, [])
 
   useEffect(() => {
     if (focusParam) {
@@ -91,8 +113,9 @@ export default function GrammarGym() {
 
       setExplanation(expl)
 
+      const mixedTopics = shuffleArray(INTERLEAVED_TOPICS).slice(0, 3)
       const result = await generateGrammarExercises({
-        focus: topic.id,
+        focus: practiceMode === 'interleaved' ? mixedTopics : topic.id,
         level: topic.level,
         userWords: words,
         count: 8,
@@ -145,8 +168,9 @@ export default function GrammarGym() {
     setChatLoading(true)
 
     try {
-      const reply = await chatWithTutor(newMessages, 'B1')
+      const reply = await chatWithTutor(msg, tutorHistory.slice(-20), 'B1')
       setChatMessages(m => [...m, { role: 'assistant', content: reply }])
+      setTutorHistory(h => [...h, { role: 'user', content: msg }, { role: 'assistant', content: reply }].slice(-20))
     } catch (e) {
       setChatMessages(m => [...m, { role: 'assistant', content: 'Sorry, check your API key in Settings.' }])
     }
@@ -169,6 +193,29 @@ export default function GrammarGym() {
         {/* Left panel — topic list */}
         <div className={`${phase === 'topics' ? 'w-full' : 'hidden lg:block lg:w-72'} flex-shrink-0`}>
           <h2 className="text-xl font-bold text-white mb-4">Grammar Gym</h2>
+          <div className="card p-3 mb-4">
+            <div className="text-xs text-slate-400 mb-2">Mode</div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPracticeMode('focused')}
+                className={`flex-1 py-1.5 rounded-lg text-xs ${practiceMode === 'focused' ? 'bg-brand-500 text-white' : 'bg-surface-800 text-slate-400'}`}
+              >
+                Focused
+              </button>
+              <button
+                onClick={() => setPracticeMode('interleaved')}
+                className={`flex-1 py-1.5 rounded-lg text-xs ${practiceMode === 'interleaved' ? 'bg-brand-500 text-white' : 'bg-surface-800 text-slate-400'}`}
+              >
+                Interleaved
+              </button>
+            </div>
+            {practiceMode === 'interleaved' && (
+              <p className="text-[11px] text-slate-500 mt-2">
+                Interleaved practice is recommended at your level - mixing topics improves long-term retention by 40%.
+              </p>
+            )}
+            <p className="text-[11px] text-slate-600 mt-1">Known words: {knownWords.toLocaleString()}</p>
+          </div>
           <div className="space-y-5">
             {Object.entries(grouped).map(([level, topics]) => (
               <div key={level}>
@@ -360,9 +407,17 @@ export default function GrammarGym() {
                 <MessageCircle size={16} className="text-brand-400" />
                 <span className="font-semibold text-white text-sm">Grammar Coach</span>
               </div>
-              <button onClick={() => setShowCoach(false)} className="text-slate-400 hover:text-white">
-                <X size={16} />
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => { setTutorHistory([]); setChatMessages([]) }}
+                  className="text-[11px] px-2 py-1 rounded bg-surface-800 text-slate-300 hover:text-white"
+                >
+                  Clear conversation
+                </button>
+                <button onClick={() => setShowCoach(false)} className="text-slate-400 hover:text-white">
+                  <X size={16} />
+                </button>
+              </div>
             </div>
 
             <div ref={chatRef} className="h-56 overflow-y-auto p-3 space-y-2">

@@ -1,35 +1,61 @@
-// SM-2 Algorithm — Wozniak (1987)
-// Rating 1 = "Forgot" → quality 0
-// Rating 2 = "Hard"   → quality 3
-// Rating 3 = "Good"   → quality 4
-// Rating 4 = "Easy"   → quality 5
+// FSRS-lite constants
+const DECAY = -0.5
+const FACTOR = Math.pow(0.9, 1 / DECAY) - 1
 
-export function calculateNextInterval(card, quality) {
-  let { easeFactor, interval, repetitions, lapses } = card
+function retrievability(stability, daysSinceReview) {
+  return Math.pow(1 + (FACTOR * daysSinceReview) / stability, DECAY)
+}
 
-  if (quality < 3) {
-    repetitions = 0
-    interval = 1
-    lapses = (lapses || 0) + 1
-    easeFactor = Math.max(1.3, easeFactor - 0.2)
-    return { interval, easeFactor, repetitions, lapses, state: 'relearning' }
+function newStability(stability, r, rating) {
+  // rating: 1=Again, 2=Hard, 3=Good, 4=Easy
+  const hardPenalty = rating === 2 ? 0.8 : 1
+  const easyBonus = rating === 4 ? 1.3 : 1
+  return stability * (
+    Math.exp(0.4) * (11 - r * 10) *
+    Math.pow(r, -0.7) * hardPenalty * easyBonus
+  )
+}
+
+export function updateCard(card, rating) {
+  const now = Date.now()
+  const currentStability = card.stability || 1
+  const currentDifficulty = card.difficulty || 5
+  const daysSince = card.lastReview ? (now - card.lastReview) / 86400000 : 0
+
+  if (rating === 1) {
+    return {
+      ...card,
+      stability: 1,
+      difficulty: Math.min(currentDifficulty + 0.2, 10),
+      state: 'relearning',
+      lapses: (card.lapses || 0) + 1,
+      interval: 1,
+      nextReview: getNextReviewTimestamp(1),
+      lastReview: now,
+      totalReviews: (card.totalReviews || 0) + 1,
+      repetitions: 0,
+    }
   }
 
-  if (repetitions === 0) {
-    interval = 1
-  } else if (repetitions === 1) {
-    interval = 6
-  } else {
-    interval = Math.round(interval * easeFactor)
+  const r = card.lastReview ? retrievability(currentStability, daysSince) : 0.9
+  const nextStability = card.stability
+    ? newStability(currentStability, r, rating)
+    : [null, 1, 2, 4, 8][rating]
+
+  const interval = Math.max(1, Math.round(nextStability))
+
+  return {
+    ...card,
+    stability: nextStability,
+    difficulty: Math.max(1, Math.min(10, currentDifficulty + (3 - rating) * 0.1)),
+    state: 'review',
+    interval,
+    nextReview: getNextReviewTimestamp(interval),
+    lastReview: now,
+    totalReviews: (card.totalReviews || 0) + 1,
+    repetitions: (card.repetitions || 0) + 1,
+    easeFactor: card.easeFactor || 2.5,
   }
-
-  easeFactor = easeFactor + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02))
-  easeFactor = Math.max(1.3, easeFactor)
-
-  repetitions += 1
-
-  const state = repetitions >= 3 ? 'review' : 'learning'
-  return { interval, easeFactor, repetitions, lapses: lapses || 0, state }
 }
 
 export function getNextReviewTimestamp(interval) {
@@ -50,9 +76,7 @@ export function estimateRetention(card) {
 }
 
 export function getIntervalPreview(card, rating) {
-  const qualityMap = { 1: 0, 2: 3, 3: 4, 4: 5 }
-  const quality = qualityMap[rating] ?? 3
-  const result = calculateNextInterval(card, quality)
+  const result = updateCard(card, rating)
   if (rating === 1) return 'Again (1 day)'
   if (result.interval === 1) return '1 day'
   if (result.interval < 30) return `${result.interval} days`

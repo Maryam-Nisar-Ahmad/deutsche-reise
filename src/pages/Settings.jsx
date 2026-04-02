@@ -9,7 +9,7 @@ import { useSettings } from '../hooks/useSettings'
 import { useVoice } from '../hooks/useVoice'
 import { testConnection } from '../lib/deepseek'
 import { germanVoice } from '../lib/voice'
-import { getAllWords, getCardStats, initDB, importWords } from '../lib/db'
+import { getAllWords, getWordCount, initDB, importWords } from '../lib/db'
 import Button from '../components/shared/Button'
 import Modal from '../components/shared/Modal'
 
@@ -44,6 +44,24 @@ export default function Settings() {
   const [startDate, setStartDate] = useState(
     () => localStorage.getItem('dr_start_date') || new Date().toISOString().split('T')[0]
   )
+  const [dbStatus, setDbStatus] = useState('Checking...')
+  const [wordsStored, setWordsStored] = useState(0)
+
+  useEffect(() => {
+    const checkDb = async () => {
+      try {
+        await initDB()
+        console.log('[DB] initDB completed in Settings.jsx')
+        setDbStatus('Connected')
+        const count = await getWordCount()
+        setWordsStored(count)
+      } catch (error) {
+        console.error('[DB] Settings DB check failed', error)
+        setDbStatus('Error')
+      }
+    }
+    checkDb()
+  }, [])
 
   // B2 target date (7 months from start)
   const targetDate = (() => {
@@ -119,6 +137,7 @@ export default function Settings() {
 
   const handleResetProgress = async () => {
     const db = await initDB()
+    console.log('[DB] initDB completed in Settings reset flow')
     const all = await db.getAll('srs_cards')
     for (const card of all) {
       await db.put('srs_cards', {
@@ -131,6 +150,8 @@ export default function Settings() {
         lapses: 0,
         state: 'new',
         totalReviews: 0,
+        stability: 1,
+        difficulty: 5,
       })
     }
     setResetConfirm(false)
@@ -369,6 +390,18 @@ export default function Settings() {
 
       {/* Data Management */}
       <Section title="Data Management" icon={Download}>
+        <div className="rounded-xl border border-surface-700 bg-surface-900/70 p-3 text-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-slate-400">IndexedDB status:</span>
+            <span className={dbStatus === 'Connected' ? 'text-green-400 font-medium' : dbStatus === 'Error' ? 'text-red-400 font-medium' : 'text-slate-300'}>
+              {dbStatus}
+            </span>
+          </div>
+          <div className="mt-1 flex items-center justify-between">
+            <span className="text-slate-400">Words stored:</span>
+            <span className="text-white font-medium">{wordsStored.toLocaleString()}</span>
+          </div>
+        </div>
         <div className="flex flex-wrap gap-3">
           <Button
             onClick={handleExportData}

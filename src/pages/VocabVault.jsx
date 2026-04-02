@@ -5,13 +5,21 @@ import {
   Filter, BookMarked, AlertCircle
 } from 'lucide-react'
 import { getAllWords, getWordCount, importWords, addWord, deleteWord, getCardForWord } from '../lib/db'
-import { parseDuolingoFormat, parseManualEntry } from '../lib/wordParser'
+import { parseDuolingoFormat, parseManualEntry, prepareGroupedImport } from '../lib/wordParser'
 import { germanVoice } from '../lib/voice'
 import Button from '../components/shared/Button'
 import Modal from '../components/shared/Modal'
 import SessionTimer from '../components/shared/SessionTimer'
 
 const FILTERS = ['All', 'New', 'Learning', 'Mastered', 'Due Today']
+
+function getCoverageInfo(knownWordCount) {
+  if (knownWordCount < 1000) return { coverage: '< 78%', cefr: 'A1', nextMilestone: 1000, label: '1,000 words = 78% text coverage (A2)' }
+  if (knownWordCount < 2000) return { coverage: '78–86%', cefr: 'A2', nextMilestone: 2000, label: '2,000 words = 86-90% coverage (B1)' }
+  if (knownWordCount < 3000) return { coverage: '86–90%', cefr: 'B1', nextMilestone: 3000, label: '3,000 words = 93-95% coverage (B1-B2)' }
+  if (knownWordCount < 5000) return { coverage: '93–95%', cefr: 'B1-B2', nextMilestone: 5000, label: '5,000 words = 95-96% coverage (B2)' }
+  return { coverage: '95-96%', cefr: 'B2+', nextMilestone: null, label: 'B2 vocabulary achieved!' }
+}
 
 function SRSBar({ repetitions = 0 }) {
   const boxes = 5
@@ -102,11 +110,22 @@ export default function VocabVault() {
     setImporting(true)
     try {
       const parsed = parseDuolingoFormat(importText)
-      const result = await importWords(parsed)
-      setImportResult({ added: result.added, skipped: result.skipped, ignored: parsed.length - result.added - result.skipped })
+      try {
+        const prev = parseInt(localStorage.getItem('dr_vocab_raw_entry_total') || '0', 10)
+        localStorage.setItem('dr_vocab_raw_entry_total', String(prev + parsed.length))
+      } catch { /* storage blocked */ }
+      const { words: groupedWords, stats: groupingStats } = prepareGroupedImport(parsed)
+      const result = await importWords(groupedWords, { groupingStats })
+      localStorage.setItem('dr_new_cards_per_day', parsed.length > 500 ? '15' : '20')
+      setImportResult({
+        added: result.added,
+        skipped: result.skipped,
+        groupingStats: result.groupingStats,
+        rawParsed: parsed.length,
+      })
       setImportText('')
       await loadWords()
-      setTimeout(() => setImportResult(null), 5000)
+      setTimeout(() => setImportResult(null), 12000)
     } catch (e) {
       console.error(e)
     }
@@ -158,7 +177,18 @@ export default function VocabVault() {
     navigator.clipboard.writeText(text).catch(console.error)
   }
 
-  const parsedCount = importText.trim() ? parseDuolingoFormat(importText).length : 0
+  const importPreview = useMemo(() => {
+    if (!importText.trim()) return { raw: 0, grouped: 0 }
+    const raw = parseDuolingoFormat(importText)
+    return { raw: raw.length, grouped: prepareGroupedImport(raw).words.length }
+  }, [importText])
+  const coverage = getCoverageInfo(words.length)
+  let rawEntryTotal = 0
+  try {
+    rawEntryTotal = parseInt(localStorage.getItem('dr_vocab_raw_entry_total') || '0', 10)
+  } catch { /* ignore */ }
+  const vocabTooltip =
+    'Duolingo counts each verb form separately. Your true vocabulary size is measured by unique word families — the root word and all its forms.'
 
   return (
     <>
@@ -169,6 +199,15 @@ export default function VocabVault() {
         <div>
           <h2 className="text-xl font-bold text-white">Vocab Vault</h2>
           <p className="text-sm text-slate-400">Manage your German vocabulary</p>
+          <p className="text-xs text-slate-500 mt-1" title={vocabTooltip}>
+            <span className="cursor-help border-b border-dotted border-slate-600">
+              Entries: {rawEntryTotal > 0 ? rawEntryTotal.toLocaleString() : '—'}
+            </span>
+            {' · '}
+            <span className="cursor-help border-b border-dotted border-slate-600">
+              Unique word families: ~{words.length.toLocaleString()}
+            </span>
+          </p>
         </div>
         <div className="flex gap-2">
           <Button
@@ -202,7 +241,7 @@ export default function VocabVault() {
           >
             <h3 className="font-semibold text-white mb-2">Paste Duolingo Word List</h3>
             <p className="text-xs text-slate-500 mb-3">
-              Format: German word, then English translation, then blank line. Repeat.
+              Format supported: one German word per line, German - English, German - English with em dash, tab-separated pairs, or two-line blocks.
             </p>
             <textarea
               value={importText}
@@ -211,15 +250,38 @@ export default function VocabVault() {
               rows={8}
               className="input-field font-mono text-sm resize-y mb-3"
             />
-            {parsedCount > 0 && (
+            {importPreview.raw > 0 && (
               <p className="text-sm text-brand-400 mb-3 font-medium">
-                ✓ {parsedCount.toLocaleString()} words detected
+                ✓ {importPreview.raw.toLocaleString()} lines detected → ~{importPreview.grouped.toLocaleString()} word families after grouping
               </p>
             )}
             {importResult && (
-              <div className="flex items-center gap-2 text-sm mb-3 p-3 bg-green-500/10 border border-green-500/20 rounded-xl text-green-400">
-                <AlertCircle size={14} />
-                Added {importResult.added} words · {importResult.skipped} already existed · {importResult.ignored} ignored
+              <div className="space-y-2 text-sm mb-3 p-3 bg-green-500/10 border border-green-500/20 rounded-xl text-green-400">
+                <div className="flex items-start gap-2">
+                  <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                  <div>
+                    <p>
+                      Imported {importResult.added + importResult.skipped} families from {importResult.rawParsed?.toLocaleString() ?? '—'} entries.
+                      {importResult.skipped > 0 && ` ${importResult.skipped} were already in your vault (skipped).`}
+                      {importResult.added > 0 && ` ${importResult.added} new families added.`}
+                    </p>
+                    {importResult.groupingStats && (importResult.groupingStats.verbFamilies > 0 || importResult.groupingStats.nounPairFamilies > 0) && (
+                      <p className="text-xs text-green-300/90 mt-2 leading-relaxed">
+                        {importResult.groupingStats.verbFormsInGroups > 0 && importResult.groupingStats.verbFamilies > 0 && (
+                          <>Grouped {importResult.groupingStats.verbFormsInGroups} conjugated forms into {importResult.groupingStats.verbFamilies} verb families. </>
+                        )}
+                        {importResult.groupingStats.nounSurfacesInPairs > 0 && importResult.groupingStats.nounPairFamilies > 0 && (
+                          <>Grouped {importResult.groupingStats.nounSurfacesInPairs} gendered forms into {importResult.groupingStats.nounPairFamilies} noun entries.</>
+                        )}
+                      </p>
+                    )}
+                    {importResult.added > 0 && (
+                      <p className="text-xs text-brand-300 mt-2">
+                        {importResult.added} new words added. They will appear in tomorrow&apos;s flashcard session. Keep using them in Duolingo today to strengthen them!
+                      </p>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
             <div className="flex gap-2">
@@ -263,6 +325,16 @@ export default function VocabVault() {
       </div>
 
       {/* Stats bar */}
+      <div className="card p-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-white text-sm">Coverage Meter</h3>
+          <span className="text-xs text-slate-400">{coverage.coverage} · {coverage.cefr}</span>
+        </div>
+        <p className="text-xs text-slate-400 mt-1">
+          You know ~{words.length.toLocaleString()} words → ~{coverage.coverage} of everyday German text (CEFR: {coverage.cefr})
+        </p>
+      </div>
+
       <div className="grid grid-cols-4 gap-3">
         {[
           { label: 'Total', value: stats.total, color: 'text-white' },
@@ -376,7 +448,12 @@ export default function VocabVault() {
                         <span className="ml-1.5 text-xs text-slate-500">{word.gender}</span>
                       )}
                     </div>
-                    <div className="text-xs text-slate-500 truncate">{word.translation}</div>
+                    <div className="text-xs text-slate-500 truncate">
+                      {word.translation}
+                      {Array.isArray(word.variants) && word.variants.length > 0 && (
+                        <span className="text-slate-600"> · +{word.variants.length} forms</span>
+                      )}
+                    </div>
                   </div>
 
                   {/* SRS bar */}

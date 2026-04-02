@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -14,7 +14,6 @@ import { useVoice } from '../hooks/useVoice'
 import { getSuggestedStoryLevelFromExposure } from '../lib/levelCalc'
 import { showXPToast, showAppToast } from '../components/shared/XPToast'
 import SessionTimer from '../components/shared/SessionTimer'
-import { clearTimerStorage } from '../hooks/useTimer'
 import { normalizeGerman } from '../lib/wordParser'
 import StoryText from '../components/story/StoryText'
 import AudioControls from '../components/story/AudioControls'
@@ -77,6 +76,16 @@ export default function StoryStudio() {
   const [regenTarget, setRegenTarget] = useState(null)
   const [regenLoadingId, setRegenLoadingId] = useState(null)
   const [isPlaying, setIsPlaying] = useState(false)
+
+  /** Frozen chunk list for current listen session (same algorithm as germanVoice.speak). */
+  const speakChunksRef = useRef([])
+  /** 'stopped' | 'playing' | 'paused' */
+  const playbackStateRef = useRef('stopped')
+  /** Index to speak next on resume (also sentence to replay after pause mid-utterance). */
+  const pausedAtSentenceRef = useRef(0)
+  /** Chunk index currently being spoken. */
+  const speakingSentenceIndexRef = useRef(0)
+  const isPlayingRef = useRef(false)
   const [showSummary, setShowSummary] = useState(false)
   const [shadowMode, setShadowMode] = useState(false)
   const [activeWordPopup, setActiveWordPopup] = useState(null) // { word, context }
@@ -88,6 +97,8 @@ export default function StoryStudio() {
   const [genChapters, setGenChapters] = useState(6)
   const [genError, setGenError] = useState('')
   const [wordCount, setWordCount] = useState(0)
+  const [topicFilter, setTopicFilter] = useState('All')
+  const [continueTopic, setContinueTopic] = useState(false)
 
   useEffect(() => {
     loadStories()
@@ -117,7 +128,19 @@ export default function StoryStudio() {
     setWordCount(words.length)
   }
 
+  const resetStoryPlayback = useCallback(() => {
+    window.speechSynthesis.cancel()
+    germanVoice.stop()
+    playbackStateRef.current = 'stopped'
+    pausedAtSentenceRef.current = 0
+    speakingSentenceIndexRef.current = 0
+    speakChunksRef.current = []
+    isPlayingRef.current = false
+    setIsPlaying(false)
+  }, [])
+
   const openStory = (story) => {
+    resetStoryPlayback()
     setCurrentStory(story)
     setCurrentChapterIdx(story.currentChapter || 0)
     setWordMeanings(normalizeWordMeanings(story.wordMeanings || {}))
@@ -147,11 +170,19 @@ export default function StoryStudio() {
         ? getSuggestedStoryLevelFromExposure(words.length)
         : genLevel
 
+      const sameTopicStories = stories.filter(s => s.theme === genTheme)
+      const previousTopicWords = continueTopic && sameTopicStories.length > 0
+        ? [...new Set((sameTopicStories[0].content || '').toLowerCase().match(/[a-zäöüß]+/gi) || [])]
+            .filter(w => w.length > 3)
+            .slice(0, 50)
+        : []
+
       const content = await generateStory({
         theme: genTheme,
         words,
         level: levelStr,
         chapterCount: genChapters,
+        previousTopicWords,
       })
 
       const chapters = parseStoryContent(content)
@@ -197,26 +228,81 @@ export default function StoryStudio() {
     const chapter = currentStory.chapters[currentChapterIdx]
     if (!chapter) return
 
+    if (playbackStateRef.current === 'playing' && window.speechSynthesis.speaking) return
+
     if (!shadowMode && storyTimerMode === 'read') {
-      clearTimerStorage('story_listen')
       setStoryTimerMode('listen')
     }
 
+    const onListenEnd = () => {
+      playbackStateRef.current = 'stopped'
+      pausedAtSentenceRef.current = 0
+      speakingSentenceIndexRef.current = 0
+      isPlayingRef.current = false
+      setIsPlaying(false)
+    }
+
+    if (playbackStateRef.current === 'paused') {
+      const start = Math.min(
+        pausedAtSentenceRef.current,
+        speakChunksRef.current.length
+      )
+      playbackStateRef.current = 'playing'
+      isPlayingRef.current = true
+      setIsPlaying(true)
+      germanVoice.speakChunks(speakChunksRef.current, start, {
+        onUtteranceStart: (idx) => {
+          speakingSentenceIndexRef.current = idx
+          pausedAtSentenceRef.current = idx
+        },
+        onAfterUtterance: (idx) => {
+          pausedAtSentenceRef.current = idx + 1
+        },
+        onEnd: onListenEnd,
+      })
+      return
+    }
+
+    const chunks = germanVoice.getSpeakChunks(chapter.text).slice()
+    speakChunksRef.current = chunks
+    pausedAtSentenceRef.current = 0
+    speakingSentenceIndexRef.current = 0
+    playbackStateRef.current = 'playing'
+    isPlayingRef.current = true
     setIsPlaying(true)
-    germanVoice.speak(chapter.text, {
-      onEnd: () => setIsPlaying(false)
+
+    germanVoice.speakChunks(chunks, 0, {
+      onUtteranceStart: (idx) => {
+        speakingSentenceIndexRef.current = idx
+        pausedAtSentenceRef.current = idx
+      },
+      onAfterUtterance: (idx) => {
+        pausedAtSentenceRef.current = idx + 1
+      },
+      onEnd: onListenEnd,
     })
   }, [currentStory, currentChapterIdx, shadowMode, storyTimerMode])
 
   const handlePause = useCallback(() => {
+    window.speechSynthesis.cancel()
     germanVoice.stop()
+    playbackStateRef.current = 'paused'
+    pausedAtSentenceRef.current = speakingSentenceIndexRef.current
+    isPlayingRef.current = false
     setIsPlaying(false)
   }, [])
 
   const handleChapterChange = async (newIdx) => {
     if (!currentStory || newIdx < 0 || newIdx >= currentStory.chapters.length) return
-    stop()
+    window.speechSynthesis.cancel()
+    germanVoice.stop()
+    playbackStateRef.current = 'stopped'
+    pausedAtSentenceRef.current = 0
+    speakingSentenceIndexRef.current = 0
+    speakChunksRef.current = []
+    isPlayingRef.current = false
     setIsPlaying(false)
+    stop()
     setShowSummary(false)
 
     // Award XP for reading a chapter
@@ -249,11 +335,9 @@ export default function StoryStudio() {
 
   const handleToggleShadow = () => {
     if (!shadowMode) {
-      clearTimerStorage('story_shadow')
       setStoryTimerMode('shadow')
       setShadowMode(true)
     } else {
-      clearTimerStorage('story_read')
       setStoryTimerMode('read')
       setShadowMode(false)
     }
@@ -313,6 +397,12 @@ export default function StoryStudio() {
 
   // LIBRARY VIEW
   if (view === 'library') {
+    const topicCounts = stories.reduce((acc, s) => {
+      acc[s.theme] = (acc[s.theme] || 0) + 1
+      return acc
+    }, {})
+    const visibleStories = topicFilter === 'All' ? stories : stories.filter(s => s.theme === topicFilter)
+
     return (
       <div className="max-w-4xl mx-auto space-y-5 relative">
         <div className="flex items-center justify-between">
@@ -328,11 +418,23 @@ export default function StoryStudio() {
           </Button>
         </div>
 
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-500">Show stories by topic:</span>
+          <select
+            value={topicFilter}
+            onChange={e => setTopicFilter(e.target.value)}
+            className="bg-surface-800 border border-surface-700 text-slate-300 text-xs rounded-lg px-2 py-1"
+          >
+            <option value="All">All</option>
+            {Object.keys(topicCounts).map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+
         {loading ? (
           <div className="flex items-center justify-center py-20">
             <Loader2 size={32} className="animate-spin text-brand-400" />
           </div>
-        ) : stories.length === 0 ? (
+        ) : visibleStories.length === 0 ? (
           <div className="card p-16 text-center">
             <BookOpen size={48} className="text-slate-600 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-slate-300 mb-2">No stories yet</h3>
@@ -341,7 +443,7 @@ export default function StoryStudio() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {stories.map((story, i) => (
+            {visibleStories.map((story, i) => (
               <motion.div
                 key={story.id}
                 initial={{ opacity: 0, y: 16 }}
@@ -360,7 +462,8 @@ export default function StoryStudio() {
                     <h3 className="font-semibold text-white truncate">{story.title}</h3>
                     <div className="flex items-center gap-2 mt-1">
                       <span className="badge-blue">{story.level}</span>
-                      <span className="text-xs text-slate-500">{story.theme}</span>
+                      <span className="text-xs text-slate-500">Topic: {story.theme}</span>
+                      {topicCounts[story.theme] > 1 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">Series</span>}
                     </div>
                   </div>
                   <div className="flex items-center gap-0.5 shrink-0 ml-2">
@@ -461,6 +564,10 @@ export default function StoryStudio() {
                   </button>
                 ))}
               </div>
+              <label className="mt-3 flex items-center gap-2 text-xs text-slate-400">
+                <input type="checkbox" checked={continueTopic} onChange={e => setContinueTopic(e.target.checked)} />
+                Continue this topic (narrow reading)
+              </label>
             </div>
 
             <div>
@@ -542,6 +649,14 @@ export default function StoryStudio() {
       <div className="flex items-center gap-3 mb-6">
         <button
           onClick={() => {
+            window.speechSynthesis.cancel()
+            germanVoice.stop()
+            playbackStateRef.current = 'stopped'
+            pausedAtSentenceRef.current = 0
+            speakingSentenceIndexRef.current = 0
+            speakChunksRef.current = []
+            isPlayingRef.current = false
+            setIsPlaying(false)
             setView('library')
             stop()
             setShadowMode(false)
@@ -621,13 +736,35 @@ export default function StoryStudio() {
         isPlaying={isPlaying}
         onPlay={handlePlay}
         onPause={handlePause}
-        onStop={() => { stop(); setIsPlaying(false) }}
+        onStop={() => {
+          window.speechSynthesis.cancel()
+          germanVoice.stop()
+          playbackStateRef.current = 'stopped'
+          pausedAtSentenceRef.current = 0
+          speakingSentenceIndexRef.current = 0
+          speakChunksRef.current = []
+          isPlayingRef.current = false
+          setIsPlaying(false)
+          stop()
+        }}
         onPrevChapter={() => handleChapterChange(currentChapterIdx - 1)}
         onNextChapter={() => handleChapterChange(currentChapterIdx + 1)}
         canGoPrev={currentChapterIdx > 0}
         canGoNext={currentChapterIdx < currentStory.chapters.length - 1}
         rate={rate}
-        onRateChange={r => { changeRate(r); if (isPlaying) { stop(); setIsPlaying(false) } }}
+        onRateChange={r => {
+          changeRate(r)
+          if (isPlaying) {
+            const idx = speakingSentenceIndexRef.current
+            window.speechSynthesis.cancel()
+            germanVoice.stop()
+            playbackStateRef.current = 'paused'
+            pausedAtSentenceRef.current = idx
+            isPlayingRef.current = false
+            setIsPlaying(false)
+            stop()
+          }
+        }}
         voices={voices}
         selectedVoiceURI={selectedVoiceURI}
         onVoiceChange={changeVoice}
@@ -647,7 +784,6 @@ export default function StoryStudio() {
         <ShadowMode
           sentences={sentences}
           onClose={() => {
-            clearTimerStorage('story_read')
             setStoryTimerMode('read')
             setShadowMode(false)
           }}

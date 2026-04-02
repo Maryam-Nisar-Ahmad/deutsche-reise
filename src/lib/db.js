@@ -1,5 +1,6 @@
 import { openDB } from 'idb'
-import { calculateNextInterval, getNextReviewTimestamp } from './srs.js'
+import { updateCard, getNextReviewTimestamp } from './srs.js'
+import { getFrequencyTier } from './wordParser.js'
 
 const DB_NAME = 'deutsche-reise-db'
 const DB_VERSION = 1
@@ -39,20 +40,52 @@ export function initDB() {
       }
     }
   })
-  return dbPromise
+  return dbPromise.then((db) => {
+    console.log('[DB] initDB resolved successfully')
+    return db
+  })
 }
 
 async function getDB() {
   return initDB()
 }
 
+async function safeGetAll(db, store, context = 'unknown') {
+  try {
+    return await db.getAll(store)
+  } catch (error) {
+    console.error(`[DB] getAll failed (${store}) in ${context}`, error)
+    return []
+  }
+}
+
+async function safeGet(db, store, key, context = 'unknown') {
+  try {
+    return await db.get(store, key)
+  } catch (error) {
+    console.error(`[DB] get failed (${store}) in ${context}`, error)
+    return null
+  }
+}
+
+async function safePut(db, store, value, context = 'unknown') {
+  try {
+    return await db.put(store, value)
+  } catch (error) {
+    console.error(`[DB] put failed (${store}) in ${context}`, error)
+    return null
+  }
+}
+
 // ─── Words ────────────────────────────────────────────────────────────────────
 
-export async function importWords(wordsArray) {
+export async function importWords(wordsArray, meta = {}) {
   const db = await getDB()
   let added = 0, skipped = 0
+  const firstReviewAt = getNextReviewTimestamp(1)
 
   for (const word of wordsArray) {
+    if (!word?.german?.trim()) continue
     try {
       const tx = db.transaction(['words', 'srs_cards'], 'readwrite')
       const wordStore = tx.objectStore('words')
@@ -65,15 +98,20 @@ export async function importWords(wordsArray) {
         continue
       }
 
+      const tier = word.frequencyTier ?? getFrequencyTier(word.german)
+      const variants = Array.isArray(word.variants) ? word.variants : []
+
       const wordData = {
         german: word.german,
-        translation: word.translation,
+        translation: (word.translation || '').trim() || 'Imported',
         normalizedKey: word.normalizedKey,
         addedAt: Date.now(),
         source: 'import',
         gender: null,
         plural: null,
         example: null,
+        variants,
+        frequencyTier: tier,
       }
       const wordId = await wordStore.add(wordData)
 
@@ -82,11 +120,13 @@ export async function importWords(wordsArray) {
         easeFactor: 2.5,
         interval: 0,
         repetitions: 0,
-        nextReview: Date.now(),
+        nextReview: firstReviewAt,
         lastReview: null,
         lapses: 0,
         state: 'new',
         totalReviews: 0,
+        stability: 1,
+        difficulty: 5,
       })
 
       await tx.done
@@ -98,7 +138,13 @@ export async function importWords(wordsArray) {
     }
   }
 
-  return { added, skipped }
+  return {
+    added,
+    skipped,
+    existing: skipped,
+    newAdded: added,
+    groupingStats: meta.groupingStats || null,
+  }
 }
 
 export async function addWord(german, translation) {
@@ -124,6 +170,8 @@ export async function addWord(german, translation) {
     gender: null,
     plural: null,
     example: null,
+    variants: [],
+    frequencyTier: getFrequencyTier(german.trim()),
   })
 
   await cardStore.add({
@@ -131,11 +179,13 @@ export async function addWord(german, translation) {
     easeFactor: 2.5,
     interval: 0,
     repetitions: 0,
-    nextReview: Date.now(),
+    nextReview: getNextReviewTimestamp(1),
     lastReview: null,
     lapses: 0,
     state: 'new',
     totalReviews: 0,
+    stability: 1,
+    difficulty: 5,
   })
 
   await tx.done
@@ -144,7 +194,7 @@ export async function addWord(german, translation) {
 
 export async function getAllWords() {
   const db = await getDB()
-  return db.getAll('words')
+  return safeGetAll(db, 'words', 'getAllWords')
 }
 
 export async function getWordCount() {
@@ -155,7 +205,7 @@ export async function getWordCount() {
 /** Words with SRS card in `review` state (mastered for level / progress). */
 export async function getMasteredWordCount() {
   const db = await getDB()
-  const all = await db.getAll('srs_cards')
+  const all = await safeGetAll(db, 'srs_cards', 'getMasteredWordCount')
   return all.filter(c => c.state === 'review').length
 }
 
@@ -169,9 +219,9 @@ export async function deleteWord(id) {
 
 export async function updateWord(id, updates) {
   const db = await getDB()
-  const word = await db.get('words', id)
+  const word = await safeGet(db, 'words', id, 'updateWord')
   if (!word) return
-  await db.put('words', { ...word, ...updates })
+  await safePut(db, 'words', { ...word, ...updates }, 'updateWord')
 }
 
 // ─── SRS Cards ────────────────────────────────────────────────────────────────
@@ -183,7 +233,7 @@ export async function getDueCards(limit = 20) {
   const due = cards.filter(c => c.nextReview <= now && c.state !== 'new')
   const result = []
   for (const card of due.slice(0, limit)) {
-    const word = await db.get('words', card.wordId)
+    const word = await safeGet(db, 'words', card.wordId, 'getDueCards')
     if (word) result.push({ ...card, word })
   }
   return result
@@ -193,38 +243,32 @@ export async function getNewCards(limit = 15) {
   const db = await getDB()
   const cards = await db.getAllFromIndex('srs_cards', 'state')
   const newCards = cards.filter(c => c.state === 'new')
-  const result = []
-  for (const card of newCards.slice(0, limit)) {
-    const word = await db.get('words', card.wordId)
-    if (word) result.push({ ...card, word })
+  const withWords = []
+  for (const card of newCards) {
+    const word = await safeGet(db, 'words', card.wordId, 'getNewCards')
+    if (word) withWords.push({ ...card, word })
   }
-  return result
+  withWords.sort((a, b) => (a.word.frequencyTier ?? 3) - (b.word.frequencyTier ?? 3))
+  return withWords.slice(0, limit)
 }
 
 export async function updateCardAfterReview(wordId, rating) {
   const db = await getDB()
-  const card = await db.get('srs_cards', wordId)
+  const card = await safeGet(db, 'srs_cards', wordId, 'updateCardAfterReview')
   if (!card) return
-
-  const qualityMap = { 1: 0, 2: 3, 3: 4, 4: 5 }
-  const quality = qualityMap[rating] ?? 3
-
-  const updates = calculateNextInterval(card, quality)
-  const nextReview = getNextReviewTimestamp(updates.interval)
-
-  await db.put('srs_cards', {
+  const normalized = {
     ...card,
-    ...updates,
-    nextReview,
-    lastReview: Date.now(),
-    totalReviews: (card.totalReviews || 0) + 1,
-  })
+    stability: card.stability || 1,
+    difficulty: card.difficulty || 5,
+  }
+  const updated = updateCard(normalized, rating)
+  await safePut(db, 'srs_cards', updated, 'updateCardAfterReview')
 }
 
 export async function getCardStats() {
   const db = await getDB()
   const now = Date.now()
-  const all = await db.getAll('srs_cards')
+  const all = await safeGetAll(db, 'srs_cards', 'getCardStats')
   return {
     due: all.filter(c => c.nextReview <= now && c.state !== 'new').length,
     new: all.filter(c => c.state === 'new').length,
@@ -237,7 +281,9 @@ export async function getCardStats() {
 
 export async function getCardForWord(wordId) {
   const db = await getDB()
-  return db.get('srs_cards', wordId)
+  const card = await safeGet(db, 'srs_cards', wordId, 'getCardForWord')
+  if (!card) return null
+  return { ...card, stability: card.stability || 1, difficulty: card.difficulty || 5 }
 }
 
 // ─── Stories ──────────────────────────────────────────────────────────────────
@@ -255,25 +301,25 @@ export async function saveStory(storyData) {
 
 export async function getAllStories() {
   const db = await getDB()
-  const stories = await db.getAll('stories')
+  const stories = await safeGetAll(db, 'stories', 'getAllStories')
   return stories.sort((a, b) => b.createdAt - a.createdAt)
 }
 
 export async function getStory(id) {
   const db = await getDB()
-  return db.get('stories', id)
+  return safeGet(db, 'stories', id, 'getStory')
 }
 
 export async function updateStoryProgress(id, currentChapter) {
   const db = await getDB()
-  const story = await db.get('stories', id)
+  const story = await safeGet(db, 'stories', id, 'updateStoryProgress')
   if (!story) return
-  await db.put('stories', {
+  await safePut(db, 'stories', {
     ...story,
     currentChapter,
     lastRead: Date.now(),
     readCount: (story.readCount || 0) + 1,
-  })
+  }, 'updateStoryProgress')
 }
 
 export async function deleteStory(id) {
@@ -283,9 +329,9 @@ export async function deleteStory(id) {
 
 export async function updateStoryRecord(id, patch) {
   const db = await getDB()
-  const prev = await db.get('stories', id)
+  const prev = await safeGet(db, 'stories', id, 'updateStoryRecord')
   if (!prev) return
-  await db.put('stories', { ...prev, ...patch, id: prev.id })
+  await safePut(db, 'stories', { ...prev, ...patch, id: prev.id }, 'updateStoryRecord')
 }
 
 // ─── Daily Sessions ───────────────────────────────────────────────────────────
@@ -308,12 +354,13 @@ const DEFAULT_DAILY_SESSION = {
   storyShadowMinutes: 0,
   grammarMinutes: 0,
   vocabMinutes: 0,
+  passiveMinutes: 0,
 }
 
 export async function getTodaySession() {
   const db = await getDB()
   const today = todayStr()
-  const session = await db.get('daily_sessions', today)
+  const session = await safeGet(db, 'daily_sessions', today, 'getTodaySession')
   if (!session) return { date: today, ...DEFAULT_DAILY_SESSION }
   return { date: today, ...DEFAULT_DAILY_SESSION, ...session }
 }
@@ -327,12 +374,12 @@ const TIMER_FIELD_BY_PAGE_KEY = {
   vocab: 'vocabMinutes',
 }
 
-export async function persistTimerMinutes(pageKey, elapsedSeconds) {
+/** Add whole minutes to today's session for a study page (manual timer Stop & Save). */
+export async function addTimerMinutesToSession(pageKey, minutes) {
   const field = TIMER_FIELD_BY_PAGE_KEY[pageKey]
-  if (!field) return
+  if (!field || minutes <= 0) return
   const session = await getTodaySession()
-  const mins = Math.floor(Math.max(0, elapsedSeconds) / 60)
-  await updateTodaySession({ [field]: Math.max(session[field] || 0, mins) })
+  await updateTodaySession({ [field]: (session[field] || 0) + minutes })
 }
 
 export function sumStudyMinutesFromSession(session) {
@@ -351,7 +398,7 @@ export async function updateTodaySession(updates) {
   const db = await getDB()
   const today = todayStr()
   const existing = await getTodaySession()
-  await db.put('daily_sessions', { ...existing, ...updates, date: today })
+  await safePut(db, 'daily_sessions', { ...existing, ...updates, date: today }, 'updateTodaySession')
 }
 
 export async function getWeekSessions() {
@@ -361,7 +408,7 @@ export async function getWeekSessions() {
     const d = new Date()
     d.setDate(d.getDate() - i)
     const dateStr = d.toISOString().split('T')[0]
-    const session = await db.get('daily_sessions', dateStr)
+    const session = await safeGet(db, 'daily_sessions', dateStr, 'getWeekSessions')
     days.push(session || { date: dateStr, xpEarned: 0, flashcardsReviewed: 0 })
   }
   return days
@@ -371,7 +418,7 @@ export async function getWeekSessions() {
 
 export async function getTotalXP() {
   const db = await getDB()
-  const all = await db.getAll('daily_sessions')
+  const all = await safeGetAll(db, 'daily_sessions', 'getTotalXP')
   return all.reduce((sum, s) => sum + (s.xpEarned || 0), 0)
 }
 
@@ -390,4 +437,13 @@ export async function saveGrammarSession(sessionData) {
     ...sessionData,
     completedAt: Date.now(),
   })
+}
+
+export async function getGrammarSessionsThisWeek() {
+  const db = await getDB()
+  const sessions = await safeGetAll(db, 'grammar_sessions', 'getGrammarSessionsThisWeek')
+  const start = new Date()
+  start.setHours(0, 0, 0, 0)
+  start.setDate(start.getDate() - 6)
+  return sessions.filter(s => (s.completedAt || 0) >= start.getTime()).length
 }

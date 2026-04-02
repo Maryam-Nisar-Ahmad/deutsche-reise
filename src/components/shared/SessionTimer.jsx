@@ -1,8 +1,8 @@
 import { useRef, useEffect } from 'react'
-import { Play, Pause, Check } from 'lucide-react'
+import { Play, Pause, Square } from 'lucide-react'
 import clsx from 'clsx'
 import { useTimer } from '../../hooks/useTimer'
-import { persistTimerMinutes } from '../../lib/db'
+import { addTimerMinutesToSession } from '../../lib/db'
 import { showTimerGoalToast } from './XPToast'
 
 function formatMMSS(totalSeconds) {
@@ -20,12 +20,10 @@ export default function SessionTimer({ goalMinutes, label, pageKey }) {
     wasGoalReached.current = false
   }, [pageKey])
 
-  const { elapsed, isRunning, isGoalReached, start, pause } = useTimer({
+  const { elapsed, timerState, isRunning, isGoalReached, start, pause, stopAndSave } = useTimer({
     pageKey,
     goalMinutes,
-    onPersist: (secs) => {
-      persistTimerMinutes(pageKey, secs)
-    },
+    onSaveMinutes: (mins) => addTimerMinutesToSession(pageKey, mins),
   })
 
   useEffect(() => {
@@ -43,35 +41,61 @@ export default function SessionTimer({ goalMinutes, label, pageKey }) {
   }, [isGoalReached, label])
 
   const goalSecs = goalMinutes * 60
+  const active = timerState === 'running' || timerState === 'paused'
 
   return (
     <div
       className={clsx(
-        'fixed z-[90] flex items-center gap-2 rounded-full px-3 h-11 min-w-[168px] max-w-[200px] justify-center text-sm font-medium tabular-nums shadow-lg transition-colors duration-300',
+        'fixed z-[90] flex items-center gap-1.5 rounded-full px-2.5 h-11 min-w-[168px] max-w-[min(92vw,280px)] justify-center text-sm font-medium tabular-nums shadow-lg transition-colors duration-300',
         'max-md:bottom-24 max-md:right-6',
         'md:bottom-6 md:right-6',
         isGoalReached && 'bg-green-600 text-white',
         !isGoalReached && isRunning && 'bg-brand-600 text-white',
-        !isGoalReached && !isRunning && 'bg-slate-700 text-slate-300',
+        !isGoalReached && timerState === 'paused' && 'bg-slate-600 text-slate-200',
+        !isGoalReached && timerState === 'stopped' && 'bg-slate-700 text-slate-300',
       )}
       role="timer"
       aria-label={`${label} session timer`}
     >
-      {isGoalReached ? (
-        <Check size={18} className="flex-shrink-0" strokeWidth={2.5} />
+      {!active ? (
+        <>
+          <button
+            type="button"
+            onClick={start}
+            className="p-1.5 rounded-full hover:bg-white/10 transition-colors flex-shrink-0"
+            aria-label="Start timer"
+          >
+            <Play size={16} className="fill-current ml-0.5" />
+          </button>
+          <span className="flex-1 text-center whitespace-nowrap">{formatMMSS(elapsed)}</span>
+        </>
       ) : (
-        <button
-          type="button"
-          onClick={() => (isRunning ? pause() : start())}
-          className="p-1.5 rounded-full hover:bg-white/10 transition-colors flex-shrink-0 -ml-0.5"
-          aria-label={isRunning ? 'Pause timer' : 'Start timer'}
-        >
-          {isRunning ? <Pause size={16} className="fill-current" /> : <Play size={16} className="fill-current ml-0.5" />}
-        </button>
+        <>
+          <button
+            type="button"
+            onClick={() => (isRunning ? pause() : start())}
+            className="p-1.5 rounded-full hover:bg-white/10 transition-colors flex-shrink-0"
+            aria-label={isRunning ? 'Pause timer' : 'Resume timer'}
+          >
+            {isRunning ? <Pause size={16} className="fill-current" /> : <Play size={16} className="fill-current ml-0.5" />}
+          </button>
+          <span className="flex-1 text-center whitespace-nowrap min-w-[4.5rem]">
+            {formatMMSS(elapsed)}
+            <span className={clsx('text-[10px] ml-1 opacity-80', isGoalReached ? 'text-white/80' : 'text-slate-300')}>
+              / {formatMMSS(goalSecs)}
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={() => stopAndSave()}
+            className="p-1.5 rounded-full hover:bg-white/10 transition-colors flex-shrink-0"
+            aria-label="Stop and save session time"
+            title="Stop & save"
+          >
+            <Square size={14} className="fill-current" />
+          </button>
+        </>
       )}
-      <span className="flex-1 text-center whitespace-nowrap">
-        {formatMMSS(elapsed)} / {formatMMSS(goalSecs)}
-      </span>
     </div>
   )
 }

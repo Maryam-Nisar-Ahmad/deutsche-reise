@@ -4,8 +4,8 @@ import {
   ChevronRight, Key, Upload, Volume2, Rocket, Check,
   Eye, EyeOff, AlertTriangle, Loader2, CheckCircle2
 } from 'lucide-react'
-import { parseDuolingoFormat } from '../lib/wordParser'
-import { importWords, getWordCount, getMasteredWordCount } from '../lib/db'
+import { parseDuolingoFormat, prepareGroupedImport } from '../lib/wordParser'
+import { importWords, getWordCount, getMasteredWordCount, initDB } from '../lib/db'
 import { testConnection } from '../lib/deepseek'
 import { germanVoice } from '../lib/voice'
 import { getLevel } from '../lib/levelCalc'
@@ -29,6 +29,7 @@ export default function Onboarding({ onComplete }) {
   const [wordCount, setWordCount] = useState(0)
   const [summaryMastered, setSummaryMastered] = useState(0)
   const [summaryWords, setSummaryWords] = useState(0)
+  const [restoreMessage, setRestoreMessage] = useState('')
   const fileRef = useRef(null)
 
   useEffect(() => {
@@ -50,7 +51,12 @@ export default function Onboarding({ onComplete }) {
     return () => clearTimeout(timer)
   }, [])
 
-  const parsedCount = wordText.trim() ? parseDuolingoFormat(wordText).length : 0
+  const importPreview = wordText.trim()
+    ? (() => {
+        const raw = parseDuolingoFormat(wordText)
+        return { raw: raw.length, grouped: prepareGroupedImport(raw).words.length }
+      })()
+    : { raw: 0, grouped: 0 }
 
   const handleTestKey = async () => {
     if (!apiKey.trim()) return
@@ -73,7 +79,13 @@ export default function Onboarding({ onComplete }) {
     }
     setImporting(true)
     const parsed = parseDuolingoFormat(wordText)
-    const result = await importWords(parsed)
+    try {
+      const prev = parseInt(localStorage.getItem('dr_vocab_raw_entry_total') || '0', 10)
+      localStorage.setItem('dr_vocab_raw_entry_total', String(prev + parsed.length))
+    } catch { /* ignore */ }
+    const { words: groupedWords, stats: groupingStats } = prepareGroupedImport(parsed)
+    const result = await importWords(groupedWords, { groupingStats })
+    localStorage.setItem('dr_new_cards_per_day', parsed.length > 500 ? '15' : '20')
     const count = await getWordCount()
     setImportResult(result)
     setWordCount(count)
@@ -121,7 +133,29 @@ export default function Onboarding({ onComplete }) {
     if (!importDone && wordText.trim()) await handleImport()
     localStorage.setItem('dr_onboarded', 'true')
     localStorage.setItem('dr_start_date', new Date().toISOString().split('T')[0])
+    try {
+      const db = await initDB()
+      const storedWords = await db.count('words')
+      console.log('[Onboarding] IndexedDB read-back success after dr_onboarded set', { storedWords })
+    } catch (error) {
+      console.error('[Onboarding] IndexedDB read-back failed after dr_onboarded set', error)
+    }
     onComplete()
+  }
+
+  const handleRestoreSession = async () => {
+    setRestoreMessage('')
+    try {
+      const count = await getWordCount()
+      if (count > 0) {
+        localStorage.setItem('dr_onboarded', 'true')
+        window.location.reload()
+        return
+      }
+      setRestoreMessage('No previous data found. Please complete setup.')
+    } catch {
+      setRestoreMessage('No previous data found. Please complete setup.')
+    }
   }
 
   const level = getLevel(summaryMastered)
@@ -178,6 +212,15 @@ export default function Onboarding({ onComplete }) {
                 >
                   Let's go <ChevronRight size={22} />
                 </button>
+                <button
+                  onClick={handleRestoreSession}
+                  className="w-full text-xs text-slate-500 hover:text-brand-400 transition-colors"
+                >
+                  Already set up? Click here to restore your session
+                </button>
+                {restoreMessage && (
+                  <p className="text-xs text-yellow-300">{restoreMessage}</p>
+                )}
               </div>
             )}
 
@@ -266,8 +309,11 @@ export default function Onboarding({ onComplete }) {
                     <Upload size={26} className="text-brand-400" />
                   </div>
                   <h2 className="text-2xl font-bold text-white">Import Your Vocabulary</h2>
-                  <p className="text-slate-400 text-sm mt-1">Paste your Duolingo word list</p>
+                  <p className="text-slate-400 text-sm mt-1">Go to Duolingo → Words tab → copy all words → paste here</p>
                 </div>
+                <p className="text-xs text-slate-500">
+                  Format: one German word per line, or German / English pairs.
+                </p>
 
                 <textarea
                   value={wordText}
@@ -277,17 +323,36 @@ export default function Onboarding({ onComplete }) {
                   className="input-field font-mono text-sm resize-none"
                 />
 
-                {parsedCount > 0 && (
+                {importPreview.raw > 0 && (
                   <p className="text-brand-400 text-sm font-medium flex items-center gap-1.5">
                     <Check size={14} />
-                    {parsedCount.toLocaleString()} words detected
+                    {importPreview.raw.toLocaleString()} lines → ~{importPreview.grouped.toLocaleString()} word families
                   </p>
                 )}
 
                 {importResult && (
-                  <div className="flex items-center gap-2 text-sm p-3 bg-green-500/10 border border-green-500/20 rounded-xl text-green-400">
-                    <CheckCircle2 size={14} />
-                    ✓ Added {importResult.added} words · {importResult.skipped} already existed
+                  <div className="space-y-2 text-sm p-3 bg-green-500/10 border border-green-500/20 rounded-xl text-green-400">
+                    <div className="flex items-start gap-2">
+                      <CheckCircle2 size={14} className="mt-0.5 shrink-0" />
+                      <div>
+                        <p>Added {importResult.added} new families · {importResult.skipped} already in vault</p>
+                        {importResult.groupingStats && (importResult.groupingStats.verbFamilies > 0 || importResult.groupingStats.nounPairFamilies > 0) && (
+                          <p className="text-xs text-green-300/90 mt-1">
+                            {importResult.groupingStats.verbFormsInGroups > 0 && importResult.groupingStats.verbFamilies > 0 && (
+                              <>Grouped {importResult.groupingStats.verbFormsInGroups} conjugated forms into {importResult.groupingStats.verbFamilies} verb families. </>
+                            )}
+                            {importResult.groupingStats.nounSurfacesInPairs > 0 && importResult.groupingStats.nounPairFamilies > 0 && (
+                              <>Grouped {importResult.groupingStats.nounSurfacesInPairs} gendered forms into {importResult.groupingStats.nounPairFamilies} noun entries.</>
+                            )}
+                          </p>
+                        )}
+                        {importResult.added > 0 && (
+                          <p className="text-xs text-brand-300 mt-2">
+                            {importResult.added} new words added. They will appear in tomorrow&apos;s flashcard session. Keep using them in Duolingo today to strengthen them!
+                          </p>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 )}
 

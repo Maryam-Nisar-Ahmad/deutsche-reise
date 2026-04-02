@@ -24,7 +24,7 @@ export function cleanMarkdown(text) {
     .trim()
 }
 
-async function callDeepSeek({ systemPrompt, userPrompt, temperature = 0.7, maxTokens = 2000 }) {
+async function callDeepSeek({ systemPrompt, userPrompt, messages, temperature = 0.7, maxTokens = 2000 }) {
   const key = getApiKey()
   if (!key) throw new Error('NO_API_KEY')
 
@@ -38,7 +38,7 @@ async function callDeepSeek({ systemPrompt, userPrompt, temperature = 0.7, maxTo
       model: MODEL,
       max_tokens: maxTokens,
       temperature,
-      messages: [
+      messages: messages || [
         ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
         { role: 'user', content: userPrompt }
       ]
@@ -54,7 +54,7 @@ async function callDeepSeek({ systemPrompt, userPrompt, temperature = 0.7, maxTo
   return data.choices[0].message.content
 }
 
-export async function generateStory({ theme, words, level, chapterCount = 6 }) {
+export async function generateStory({ theme, words, level, chapterCount = 6, previousTopicWords = [] }) {
   const wordList = shuffleArray(words).slice(0, 200)
     .map(w => `${w.german} (${w.translation})`).join(', ')
 
@@ -69,6 +69,7 @@ REQUIREMENTS:
 - Each chapter: 130–200 words, titled "Kapitel N: [Creative German Title]"
 - Language level: ${level} — use mostly simple, clear German with some B1-B2 vocabulary for stretch
 - Naturally weave in as many of these vocabulary words as possible: ${wordList}
+- Use vocabulary that appeared in the learner's previous story on this topic: ${previousTopicWords.join(', ') || 'none available yet'}. This is deliberate narrow reading practice.
 - Make it COMPELLING — real characters, real conflict, real emotion
 - Vary sentence length. Use both simple and complex sentences.
 - After EVERY chapter, add a line: [ENGLISH_SUMMARY: one sentence summary of what happened]
@@ -138,8 +139,10 @@ export async function generateGrammarExercises({ focus, level, userWords, count 
     infinitive_constructions: "infinitive constructions (zu + infinitiv, um...zu, ohne...zu, anstatt...zu)"
   }
 
+  const focusList = Array.isArray(focus) ? focus : [focus]
   const wordSample = (userWords || []).slice(0, 30).map(w => w.german).join(', ')
-  const focusDesc = focusDescriptions[focus] || focus
+  const focusDesc = focusList.map(item => focusDescriptions[item] || item).join(' + ')
+  const focusLabel = Array.isArray(focus) ? 'interleaved' : focus
 
   const userPrompt = `Create ${count} German grammar exercises focusing on: ${focusDesc}.
 
@@ -147,7 +150,7 @@ ${wordSample ? `Use these vocabulary words where natural: ${wordSample}` : ''}
 
 Return ONLY valid JSON (no markdown, no backticks):
 {
-  "focus": "${focus}",
+  "focus": "${focusLabel}",
   "exercises": [
     {
       "type": "fill_blank",
@@ -188,19 +191,27 @@ export async function explainGrammarFocus(focus) {
   return cleanMarkdown(raw)
 }
 
-export async function chatWithTutor(messages, userLevel) {
-  const systemPrompt = `You are a friendly, encouraging German tutor. The student is at ${userLevel} level aiming for B2 in 7 months.
+export async function chatWithTutor(latestMessage, conversationHistory = [], userLevel = 'B1') {
+  const systemPrompt = `You are a friendly German grammar coach helping an English-speaking learner. ALWAYS respond in English, never in German. You may include German words, examples, or sentences to illustrate grammar points, but your explanations, answers, and all conversational text must be in English. If the user asks a question in any language, always answer in English.
+
+You are a friendly, encouraging German tutor. The student is at ${userLevel} level aiming for B2 in 7 months.
 
 Rules:
-- Mix German and English naturally based on the student's level
 - When they make a grammar mistake, gently correct it in brackets: [Correction: ...]
 - Keep responses SHORT (2-4 sentences) so conversation flows
 - Ask follow-up questions to keep them talking
 - If they ask grammar questions, explain simply with 1 example
-- Be warm, positive, never condescending`
+- Be warm, positive, never condescending
 
-  const lastMessage = messages[messages.length - 1]?.content || ''
-  return callDeepSeek({ systemPrompt, userPrompt: lastMessage, temperature: 0.7, maxTokens: 300 })
+Remember: explain IN ENGLISH, use German only for examples.`
+
+  const clippedHistory = (conversationHistory || []).slice(-20)
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...clippedHistory,
+    { role: 'user', content: latestMessage }
+  ]
+  return callDeepSeek({ messages, temperature: 0.7, maxTokens: 300 })
 }
 
 export async function testConnection() {
