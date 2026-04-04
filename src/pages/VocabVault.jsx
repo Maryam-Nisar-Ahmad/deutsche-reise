@@ -5,7 +5,8 @@ import {
   Filter, BookMarked, AlertCircle
 } from 'lucide-react'
 import { getAllWords, getWordCount, importWords, addWord, deleteWord, getCardForWord } from '../lib/db'
-import { parseDuolingoFormat, parseManualEntry, prepareGroupedImport } from '../lib/wordParser'
+import { parseDuolingoFormat, parseManualEntry, prepareGroupedImportRules } from '../lib/wordParser'
+import { prepareGroupedImport } from '../lib/wordGrouper'
 import { germanVoice } from '../lib/voice'
 import Button from '../components/shared/Button'
 import Modal from '../components/shared/Modal'
@@ -47,6 +48,7 @@ export default function VocabVault() {
   const [importResult, setImportResult] = useState(null)
   const [loading, setLoading] = useState(true)
   const [importing, setImporting] = useState(false)
+  const [importStatus, setImportStatus] = useState('')
   const [manualGerman, setManualGerman] = useState('')
   const [manualTranslation, setManualTranslation] = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState(null)
@@ -108,13 +110,23 @@ export default function VocabVault() {
   const handleImport = async () => {
     if (!importText.trim()) return
     setImporting(true)
+    setImportStatus('')
     try {
       const parsed = parseDuolingoFormat(importText)
       try {
         const prev = parseInt(localStorage.getItem('dr_vocab_raw_entry_total') || '0', 10)
         localStorage.setItem('dr_vocab_raw_entry_total', String(prev + parsed.length))
       } catch { /* storage blocked */ }
-      const { words: groupedWords, stats: groupingStats } = prepareGroupedImport(parsed)
+      const apiKey = localStorage.getItem('dr_api_key')
+      if (apiKey?.trim()) {
+        setImportStatus('🤖 AI is grouping your words into families...')
+      }
+      const { words: groupedWords, stats: groupingStats } = await prepareGroupedImport(parsed, apiKey, {
+        onBatchProgress: (cur, tot) => {
+          setImportStatus(`🤖 AI grouping batch ${cur} of ${tot}... (this takes ~10 seconds)`)
+        },
+      })
+      setImportStatus('')
       const result = await importWords(groupedWords, { groupingStats })
       localStorage.setItem('dr_new_cards_per_day', parsed.length > 500 ? '15' : '20')
       setImportResult({
@@ -122,6 +134,8 @@ export default function VocabVault() {
         skipped: result.skipped,
         groupingStats: result.groupingStats,
         rawParsed: parsed.length,
+        familyCount: groupedWords.length,
+        groupingMethod: groupingStats?.method,
       })
       setImportText('')
       await loadWords()
@@ -130,6 +144,7 @@ export default function VocabVault() {
       console.error(e)
     }
     setImporting(false)
+    setImportStatus('')
   }
 
   const handleFileUpload = (e) => {
@@ -180,7 +195,7 @@ export default function VocabVault() {
   const importPreview = useMemo(() => {
     if (!importText.trim()) return { raw: 0, grouped: 0 }
     const raw = parseDuolingoFormat(importText)
-    return { raw: raw.length, grouped: prepareGroupedImport(raw).words.length }
+    return { raw: raw.length, grouped: prepareGroupedImportRules(raw).words.length }
   }, [importText])
   const coverage = getCoverageInfo(words.length)
   let rawEntryTotal = 0
@@ -252,7 +267,13 @@ export default function VocabVault() {
             />
             {importPreview.raw > 0 && (
               <p className="text-sm text-brand-400 mb-3 font-medium">
-                ✓ {importPreview.raw.toLocaleString()} lines detected → ~{importPreview.grouped.toLocaleString()} word families after grouping
+                ✓ {importPreview.raw.toLocaleString()} lines detected → ~{importPreview.grouped.toLocaleString()} word families (rule-based estimate; with a saved API key, import uses AI for smarter grouping)
+              </p>
+            )}
+            {importStatus && (
+              <p className="text-sm text-slate-300 mb-3 flex items-center gap-2">
+                <span className="inline-block h-3.5 w-3.5 rounded-full border-2 border-brand-500 border-t-transparent animate-spin shrink-0" />
+                {importStatus}
               </p>
             )}
             {importResult && (
@@ -261,6 +282,12 @@ export default function VocabVault() {
                   <AlertCircle size={14} className="mt-0.5 shrink-0" />
                   <div>
                     <p>
+                      {importResult.rawParsed != null && importResult.familyCount != null && (
+                        <span className="block mb-1">
+                          Done! {importResult.rawParsed.toLocaleString()} Duolingo entries → {importResult.familyCount.toLocaleString()} unique word families
+                          {importResult.groupingMethod === 'ai' ? ' (AI)' : importResult.groupingMethod === 'rules' ? ' (rules)' : ''}.
+                        </span>
+                      )}
                       Imported {importResult.added + importResult.skipped} families from {importResult.rawParsed?.toLocaleString() ?? '—'} entries.
                       {importResult.skipped > 0 && ` ${importResult.skipped} were already in your vault (skipped).`}
                       {importResult.added > 0 && ` ${importResult.added} new families added.`}

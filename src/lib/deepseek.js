@@ -24,8 +24,8 @@ export function cleanMarkdown(text) {
     .trim()
 }
 
-async function callDeepSeek({ systemPrompt, userPrompt, messages, temperature = 0.7, maxTokens = 2000 }) {
-  const key = getApiKey()
+async function deepSeekFetch(messages, apiKeyOverride, temperature, maxTokens) {
+  const key = (apiKeyOverride != null && String(apiKeyOverride).trim()) || getApiKey()
   if (!key) throw new Error('NO_API_KEY')
 
   const response = await fetch(DEEPSEEK_URL, {
@@ -38,10 +38,7 @@ async function callDeepSeek({ systemPrompt, userPrompt, messages, temperature = 
       model: MODEL,
       max_tokens: maxTokens,
       temperature,
-      messages: messages || [
-        ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-        { role: 'user', content: userPrompt }
-      ]
+      messages,
     })
   })
 
@@ -52,6 +49,41 @@ async function callDeepSeek({ systemPrompt, userPrompt, messages, temperature = 
 
   const data = await response.json()
   return data.choices[0].message.content
+}
+
+/**
+ * @param {Array<{role: string, content: string}>} messages — user/assistant turns (system added via options)
+ * @param {string | null} apiKey — explicit key, or null/undefined to use localStorage
+ * @param {{ systemPrompt?: string | null, temperature?: number, maxTokens?: number }} [options]
+ */
+export async function callDeepSeek(messages, apiKey = null, options = {}) {
+  const {
+    systemPrompt = null,
+    temperature = 0.7,
+    maxTokens = 2000,
+  } = options
+  const msgs = [
+    ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+    ...(Array.isArray(messages) ? messages : []),
+  ]
+  const result = await deepSeekFetch(msgs, apiKey, temperature, maxTokens)
+  console.log('[DeepSeek] Response type:', typeof result)
+  console.log(
+    '[DeepSeek] Response preview:',
+    typeof result === 'string'
+      ? (result || '').substring(0, 100)
+      : JSON.stringify(result ?? null).substring(0, 100)
+  )
+  return result
+}
+
+/** Internal: uses dr_api_key from localStorage. */
+async function invokeDeepSeek({ systemPrompt, userPrompt, messages, temperature = 0.7, maxTokens = 2000 }) {
+  const msgs = messages ?? [
+    ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+    ...(userPrompt != null ? [{ role: 'user', content: userPrompt }] : []),
+  ]
+  return deepSeekFetch(msgs, null, temperature, maxTokens)
 }
 
 export async function generateStory({ theme, words, level, chapterCount = 6, previousTopicWords = [] }) {
@@ -77,7 +109,7 @@ REQUIREMENTS:
 
 Write ONLY the story. No meta-commentary. Start directly with "Kapitel 1:"`
 
-  const raw = await callDeepSeek({ systemPrompt, userPrompt, temperature: 0.85, maxTokens: 4000 })
+  const raw = await invokeDeepSeek({ systemPrompt, userPrompt, temperature: 0.85, maxTokens: 4000 })
   return cleanMarkdown(raw)
 }
 
@@ -88,7 +120,7 @@ Words: ${unknownWords.join(', ')}
 
 Return format: {"word1": "meaning", "word2": "meaning"}`
 
-  const result = await callDeepSeek({ userPrompt, temperature: 0.1, maxTokens: 500 })
+  const result = await invokeDeepSeek({ userPrompt, temperature: 0.1, maxTokens: 500 })
   try {
     return JSON.parse(result.trim())
   } catch {
@@ -113,7 +145,7 @@ RELATED WORDS: (2-3 related German words or common phrases)
 
 Write clearly and helpfully. No extra formatting symbols.`
 
-  const raw = await callDeepSeek({ userPrompt, temperature: 0.3, maxTokens: 600 })
+  const raw = await invokeDeepSeek({ userPrompt, temperature: 0.3, maxTokens: 600 })
   return cleanMarkdown(raw)
 }
 
@@ -176,7 +208,7 @@ Return ONLY valid JSON (no markdown, no backticks):
   ]
 }`
 
-  const result = await callDeepSeek({ userPrompt, temperature: 0.4, maxTokens: 2000 })
+  const result = await invokeDeepSeek({ userPrompt, temperature: 0.4, maxTokens: 2000 })
   try {
     const cleaned = result.trim().replace(/^```json\n?/, '').replace(/\n?```$/, '')
     return JSON.parse(cleaned)
@@ -187,7 +219,7 @@ Return ONLY valid JSON (no markdown, no backticks):
 
 export async function explainGrammarFocus(focus) {
   const userPrompt = `Explain German ${focus.replace(/_/g, ' ')} to a B1 learner in 150 words maximum. Be clear and direct. Include 2 example sentences. No markdown headers.`
-  const raw = await callDeepSeek({ userPrompt, temperature: 0.2, maxTokens: 300 })
+  const raw = await invokeDeepSeek({ userPrompt, temperature: 0.2, maxTokens: 300 })
   return cleanMarkdown(raw)
 }
 
@@ -211,9 +243,9 @@ Remember: explain IN ENGLISH, use German only for examples.`
     ...clippedHistory,
     { role: 'user', content: latestMessage }
   ]
-  return callDeepSeek({ messages, temperature: 0.7, maxTokens: 300 })
+  return invokeDeepSeek({ messages, temperature: 0.7, maxTokens: 300 })
 }
 
 export async function testConnection() {
-  return callDeepSeek({ userPrompt: "Say exactly: ok", temperature: 0, maxTokens: 10 })
+  return invokeDeepSeek({ userPrompt: "Say exactly: ok", temperature: 0, maxTokens: 10 })
 }

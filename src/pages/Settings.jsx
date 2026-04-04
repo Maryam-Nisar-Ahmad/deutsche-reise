@@ -3,13 +3,14 @@ import { motion } from 'framer-motion'
 import {
   Key, Eye, EyeOff, Volume2, Sliders, Calendar,
   Download, Upload, Trash2, AlertTriangle, CheckCircle2,
-  RefreshCw, Loader2, Bell
+  RefreshCw, Loader2, Bell, BookMarked,
 } from 'lucide-react'
 import { useSettings } from '../hooks/useSettings'
 import { useVoice } from '../hooks/useVoice'
 import { testConnection } from '../lib/deepseek'
 import { germanVoice } from '../lib/voice'
-import { getAllWords, getWordCount, initDB, importWords } from '../lib/db'
+import { getAllWords, getWordCount, initDB, importWords, applyAIFamilyMerge } from '../lib/db.js'
+import { groupWordFamiliesWithAI } from '../lib/wordGrouper.js'
 import Button from '../components/shared/Button'
 import Modal from '../components/shared/Modal'
 
@@ -46,6 +47,10 @@ export default function Settings() {
   )
   const [dbStatus, setDbStatus] = useState('Checking...')
   const [wordsStored, setWordsStored] = useState(0)
+  const [regroupConfirm, setRegroupConfirm] = useState(false)
+  const [regroupBusy, setRegroupBusy] = useState(false)
+  const [regroupProgress, setRegroupProgress] = useState('')
+  const [regroupResult, setRegroupResult] = useState(null)
 
   useEffect(() => {
     const checkDb = async () => {
@@ -170,6 +175,66 @@ export default function Settings() {
         alert(p === 'granted' ? 'Notifications enabled!' : 'Permission denied.')
       })
     }
+  }
+
+  const refreshWordCount = async () => {
+    try {
+      const c = await getWordCount()
+      setWordsStored(c)
+    } catch { /* ignore */ }
+  }
+
+  const openRegroupConfirm = async () => {
+    setRegroupResult(null)
+    await refreshWordCount()
+    setRegroupConfirm(true)
+  }
+
+  const runRegroupWithAI = async () => {
+    const apiKey = localStorage.getItem('dr_api_key')
+    console.log(
+      '[Settings] API key at click time:',
+      apiKey ? String(apiKey).substring(0, 8) + '...' : 'MISSING'
+    )
+    if (!apiKey?.trim()) {
+      alert(
+        'No API key found. Please save your DeepSeek API key in the API Settings section above first.'
+      )
+      setRegroupConfirm(false)
+      return
+    }
+    setRegroupConfirm(false)
+    setRegroupBusy(true)
+    setRegroupProgress('')
+    setRegroupResult(null)
+    try {
+      const allWords = await getAllWords()
+      const rawEntryTotal = allWords.length
+      try {
+        localStorage.setItem('dr_vocab_raw_entry_total', String(rawEntryTotal))
+      } catch { /* ignore */ }
+
+      const wordList = allWords.map((w) => ({
+        german: w.german,
+        translation: w.translation || '',
+      }))
+
+      const { groups: grouped, method: regroupMethod } = await groupWordFamiliesWithAI(wordList, apiKey.trim(), {
+        onBatchProgress: (cur, tot) => {
+          setRegroupProgress(`🤖 Analyzing batch ${cur} of ${tot}...`)
+        },
+      })
+
+      setRegroupProgress('Merging duplicates in IndexedDB...')
+      const mergeResult = await applyAIFamilyMerge(grouped)
+      setRegroupResult({ ...mergeResult, method: regroupMethod })
+      await refreshWordCount()
+    } catch (e) {
+      console.error(e)
+      alert(e?.message || 'Re-grouping failed. Check your API key and try again.')
+    }
+    setRegroupBusy(false)
+    setRegroupProgress('')
   }
 
   return (
@@ -388,6 +453,45 @@ export default function Settings() {
         </div>
       </Section>
 
+      {/* Vocabulary maintenance */}
+      <Section title="Vocabulary Maintenance" icon={BookMarked}>
+        <p className="text-sm text-slate-400">
+          Use DeepSeek to merge conjugations and gendered pairs into single cards. Your SRS progress on the kept card is preserved.
+        </p>
+        <Button
+          onClick={openRegroupConfirm}
+          variant="secondary"
+          size="sm"
+          disabled={!apiKey?.trim() || wordsStored === 0 || regroupBusy}
+          loading={regroupBusy}
+          icon={<RefreshCw size={14} />}
+        >
+          Re-group Existing Words with AI
+        </Button>
+        {!apiKey?.trim() && (
+          <p className="text-xs text-slate-500">Save an API key in the section above to enable AI re-grouping.</p>
+        )}
+        {regroupProgress && (
+          <p className="text-sm text-slate-300 flex items-center gap-2">
+            <Loader2 size={14} className="animate-spin shrink-0" />
+            {regroupProgress}
+          </p>
+        )}
+        {regroupResult && (
+          <div className="rounded-xl border border-green-500/25 bg-green-500/10 p-4 text-sm text-green-300 space-y-1">
+            <p className="font-semibold text-green-400">✅ Re-grouping complete!</p>
+            <p>Before: {regroupResult.beforeCount.toLocaleString()} entries</p>
+            <p>After: {regroupResult.afterCount.toLocaleString()} unique word families</p>
+            <p>Removed: {regroupResult.removedDuplicates.toLocaleString()} duplicate forms</p>
+            {regroupResult.method === 'rules' ? (
+              <p className="text-yellow-400 font-medium pt-1">Method used: 📐 Rule-based fallback</p>
+            ) : (
+              <p className="text-green-400 font-medium pt-1">Method used: ✨ DeepSeek AI</p>
+            )}
+          </div>
+        )}
+      </Section>
+
       {/* Data Management */}
       <Section title="Data Management" icon={Download}>
         <div className="rounded-xl border border-surface-700 bg-surface-900/70 p-3 text-sm">
@@ -452,6 +556,19 @@ export default function Settings() {
         <div className="flex gap-2">
           <Button variant="danger" onClick={handleResetProgress}>Reset Progress</Button>
           <Button variant="secondary" onClick={() => setResetConfirm(false)}>Cancel</Button>
+        </div>
+      </Modal>
+
+      {/* AI re-group confirm */}
+      <Modal isOpen={regroupConfirm} onClose={() => !regroupBusy && setRegroupConfirm(false)} title="Re-group with AI?" size="sm">
+        <p className="text-slate-300 mb-4">
+          AI will analyze your {wordsStored.toLocaleString()} existing words and merge duplicate conjugations and gendered pairs into single cards.
+          This uses your DeepSeek API key and may take about {Math.max(1, Math.ceil(wordsStored / 80) * 10)} seconds.
+          Your review history on the kept card is preserved. Continue?
+        </p>
+        <div className="flex gap-2">
+          <Button onClick={runRegroupWithAI}>Continue</Button>
+          <Button variant="secondary" onClick={() => setRegroupConfirm(false)}>Cancel</Button>
         </div>
       </Modal>
 

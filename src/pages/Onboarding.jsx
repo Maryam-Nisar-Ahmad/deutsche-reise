@@ -4,7 +4,8 @@ import {
   ChevronRight, Key, Upload, Volume2, Rocket, Check,
   Eye, EyeOff, AlertTriangle, Loader2, CheckCircle2
 } from 'lucide-react'
-import { parseDuolingoFormat, prepareGroupedImport } from '../lib/wordParser'
+import { parseDuolingoFormat, prepareGroupedImportRules } from '../lib/wordParser'
+import { prepareGroupedImport } from '../lib/wordGrouper'
 import { importWords, getWordCount, getMasteredWordCount, initDB } from '../lib/db'
 import { testConnection } from '../lib/deepseek'
 import { germanVoice } from '../lib/voice'
@@ -21,6 +22,7 @@ export default function Onboarding({ onComplete }) {
   const [testResult, setTestResult] = useState(null)
   const [wordText, setWordText] = useState('')
   const [importing, setImporting] = useState(false)
+  const [importStatus, setImportStatus] = useState('')
   const [importDone, setImportDone] = useState(false)
   const [importResult, setImportResult] = useState(null)
   const [voices, setVoices] = useState([])
@@ -54,7 +56,7 @@ export default function Onboarding({ onComplete }) {
   const importPreview = wordText.trim()
     ? (() => {
         const raw = parseDuolingoFormat(wordText)
-        return { raw: raw.length, grouped: prepareGroupedImport(raw).words.length }
+        return { raw: raw.length, grouped: prepareGroupedImportRules(raw).words.length }
       })()
     : { raw: 0, grouped: 0 }
 
@@ -78,19 +80,30 @@ export default function Onboarding({ onComplete }) {
       return
     }
     setImporting(true)
+    setImportStatus('')
     const parsed = parseDuolingoFormat(wordText)
     try {
       const prev = parseInt(localStorage.getItem('dr_vocab_raw_entry_total') || '0', 10)
       localStorage.setItem('dr_vocab_raw_entry_total', String(prev + parsed.length))
     } catch { /* ignore */ }
-    const { words: groupedWords, stats: groupingStats } = prepareGroupedImport(parsed)
+    const apiKey = localStorage.getItem('dr_api_key')
+    if (apiKey?.trim()) {
+      setImportStatus('🤖 AI is grouping your words into families...')
+    }
+    const { words: groupedWords, stats: groupingStats } = await prepareGroupedImport(parsed, apiKey, {
+      onBatchProgress: (cur, tot) => {
+        setImportStatus(`🤖 AI grouping batch ${cur} of ${tot}... (this takes ~10 seconds)`)
+      },
+    })
+    setImportStatus('')
     const result = await importWords(groupedWords, { groupingStats })
     localStorage.setItem('dr_new_cards_per_day', parsed.length > 500 ? '15' : '20')
     const count = await getWordCount()
-    setImportResult(result)
+    setImportResult({ ...result, rawParsed: parsed.length, familyCount: groupedWords.length, groupingMethod: groupingStats?.method })
     setWordCount(count)
     setImportDone(true)
     setImporting(false)
+    setImportStatus('')
   }
 
   const handleFileUpload = (e) => {
@@ -326,7 +339,14 @@ export default function Onboarding({ onComplete }) {
                 {importPreview.raw > 0 && (
                   <p className="text-brand-400 text-sm font-medium flex items-center gap-1.5">
                     <Check size={14} />
-                    {importPreview.raw.toLocaleString()} lines → ~{importPreview.grouped.toLocaleString()} word families
+                    {importPreview.raw.toLocaleString()} lines → ~{importPreview.grouped.toLocaleString()} word families (estimate; import uses AI if API key is set)
+                  </p>
+                )}
+
+                {importStatus && (
+                  <p className="text-slate-300 text-sm flex items-center gap-2">
+                    <Loader2 size={14} className="animate-spin shrink-0" />
+                    {importStatus}
                   </p>
                 )}
 
@@ -335,7 +355,15 @@ export default function Onboarding({ onComplete }) {
                     <div className="flex items-start gap-2">
                       <CheckCircle2 size={14} className="mt-0.5 shrink-0" />
                       <div>
-                        <p>Added {importResult.added} new families · {importResult.skipped} already in vault</p>
+                        <p>
+                          {importResult.rawParsed != null && importResult.familyCount != null && (
+                            <span className="block mb-1">
+                              Done! {importResult.rawParsed.toLocaleString()} Duolingo entries → {importResult.familyCount.toLocaleString()} unique word families
+                              {importResult.groupingMethod === 'ai' ? ' (AI)' : importResult.groupingMethod === 'rules' ? ' (rules)' : ''}.
+                            </span>
+                          )}
+                          Added {importResult.added} new families · {importResult.skipped} already in vault
+                        </p>
                         {importResult.groupingStats && (importResult.groupingStats.verbFamilies > 0 || importResult.groupingStats.nounPairFamilies > 0) && (
                           <p className="text-xs text-green-300/90 mt-1">
                             {importResult.groupingStats.verbFormsInGroups > 0 && importResult.groupingStats.verbFamilies > 0 && (

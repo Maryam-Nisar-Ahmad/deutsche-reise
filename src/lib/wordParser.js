@@ -69,10 +69,10 @@ function isProbablyFeminineNoun(word) {
 }
 
 /**
- * After parseDuolingoFormat: merge verb conjugations and gendered noun pairs.
- * Returns rows ready for importWords + stats for UI messages.
+ * Rule-based fallback (suffix / noun pairs) when AI grouping is unavailable.
+ * Prefer `prepareGroupedImport` from `wordGrouper.js` when an API key is set.
  */
-export function prepareGroupedImport(parsed) {
+export function prepareGroupedImportRules(parsed) {
   const list = parsed.filter((p) => p?.german?.trim())
   if (list.length === 0) {
     return {

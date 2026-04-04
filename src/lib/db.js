@@ -1,6 +1,6 @@
 import { openDB } from 'idb'
 import { updateCard, getNextReviewTimestamp } from './srs.js'
-import { getFrequencyTier } from './wordParser.js'
+import { getFrequencyTier, normalizeGerman } from './wordParser.js'
 
 const DB_NAME = 'deutsche-reise-db'
 const DB_VERSION = 1
@@ -215,6 +215,93 @@ export async function deleteWord(id) {
   await tx.objectStore('words').delete(id)
   await tx.objectStore('srs_cards').delete(id)
   await tx.done
+}
+
+/**
+ * Merge existing IndexedDB words using AI `groups` (lemma + variants + translation + tier).
+ * Keeps one card per family (lemma match preferred, else best SRS repetitions / totalReviews).
+ */
+export async function applyAIFamilyMerge(aiGroups) {
+  const db = await getDB()
+  let wordsSnapshot = await safeGetAll(db, 'words', 'applyAIFamilyMerge')
+  const beforeCount = wordsSnapshot.length
+  const cards = await safeGetAll(db, 'srs_cards', 'applyAIFamilyMerge')
+  const cardByWordId = new Map(cards.map((c) => [c.wordId, c]))
+
+  let groupsTouched = 0
+  let deletedTotal = 0
+
+  const list = Array.isArray(aiGroups) ? aiGroups : []
+
+  for (const g of list) {
+    const lemma = (g.lemma || '').trim()
+    if (!lemma) continue
+    const translation = (g.translation || '').trim() || 'Imported'
+    const rawVariants = Array.isArray(g.variants) ? g.variants : []
+    const tier = Number(g.frequencyTier)
+    const frequencyTier = tier >= 1 && tier <= 3 ? tier : 3
+
+    const nkLemma = normalizeGerman(lemma)
+    const surfaceKeys = new Set([nkLemma, ...rawVariants.map((v) => normalizeGerman(String(v).trim())).filter(Boolean)])
+
+    const matches = wordsSnapshot.filter((w) => surfaceKeys.has(normalizeGerman(w.german)))
+    if (matches.length === 0) continue
+
+    const lemmaLower = lemma.toLowerCase()
+    let keeper =
+      matches.find((w) => w.german.trim().toLowerCase() === lemmaLower) ||
+      [...matches].sort((a, b) => {
+        const ca = cardByWordId.get(a.id) || { repetitions: 0, totalReviews: 0 }
+        const cb = cardByWordId.get(b.id) || { repetitions: 0, totalReviews: 0 }
+        if (cb.repetitions !== ca.repetitions) return cb.repetitions - ca.repetitions
+        return (cb.totalReviews || 0) - (ca.totalReviews || 0)
+      })[0]
+
+    const dupIds = matches.filter((w) => w.id !== keeper.id).map((w) => w.id)
+
+    const variantSet = new Set()
+    for (const w of matches) {
+      const surf = w.german.trim()
+      if (normalizeGerman(surf) !== nkLemma) variantSet.add(surf)
+    }
+    for (const v of rawVariants) {
+      const t = String(v).trim()
+      if (t && normalizeGerman(t) !== nkLemma) variantSet.add(t)
+    }
+    const variantList = [...variantSet].sort((a, b) => a.localeCompare(b, 'de'))
+
+    for (const id of dupIds) {
+      await deleteWord(id)
+      deletedTotal++
+      cardByWordId.delete(id)
+    }
+
+    wordsSnapshot = wordsSnapshot.filter((w) => !dupIds.includes(w.id))
+
+    const updatedWord = {
+      ...keeper,
+      german: lemma,
+      translation,
+      normalizedKey: nkLemma,
+      variants: variantList,
+      frequencyTier,
+    }
+    await safePut(db, 'words', updatedWord, 'applyAIFamilyMerge')
+
+    const ki = wordsSnapshot.findIndex((w) => w.id === keeper.id)
+    if (ki >= 0) wordsSnapshot[ki] = updatedWord
+
+    groupsTouched++
+  }
+
+  const afterCount = wordsSnapshot.length
+
+  return {
+    beforeCount,
+    afterCount,
+    removedDuplicates: deletedTotal,
+    groupsTouched,
+  }
 }
 
 export async function updateWord(id, updates) {
