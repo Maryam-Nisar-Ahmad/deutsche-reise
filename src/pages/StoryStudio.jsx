@@ -1,13 +1,16 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  ArrowLeft, Plus, BookOpen, Trash2, ChevronDown, Eye, EyeOff, Loader2, RefreshCw
+  ArrowLeft, Plus, BookOpen, Trash2, ChevronDown, Eye, EyeOff, Loader2, RefreshCw,
+  Pickaxe, BarChart3,
 } from 'lucide-react'
 import {
   getAllStories, saveStory, deleteStory, updateStoryProgress,
-  getAllWords, updateTodaySession, getTodaySession, addXP, getStory, updateStoryRecord
+  getAllWords, updateTodaySession, getTodaySession, addXP, getStory, updateStoryRecord,
+  recordStoryChapterEncounters, mineChapterClozes,
 } from '../lib/db'
+import { estimateLexicalCoverage } from '../lib/storyMining'
 import { generateStory, explainUnknownWords } from '../lib/deepseek'
 import { germanVoice } from '../lib/voice'
 import { useVoice } from '../hooks/useVoice'
@@ -99,6 +102,7 @@ export default function StoryStudio() {
   const [wordCount, setWordCount] = useState(0)
   const [topicFilter, setTopicFilter] = useState('All')
   const [continueTopic, setContinueTopic] = useState(false)
+  const [mineBusy, setMineBusy] = useState(false)
 
   useEffect(() => {
     loadStories()
@@ -292,6 +296,14 @@ export default function StoryStudio() {
     setIsPlaying(false)
   }, [])
 
+  const flushChapterEncounters = async () => {
+    if (!currentStory) return
+    const ch = currentStory.chapters[currentChapterIdx]
+    if (!ch) return
+    const body = ch.text.replace(/^Kapitel[^\n]+\n?/i, '')
+    await recordStoryChapterEncounters(currentStory.id, currentChapterIdx, body)
+  }
+
   const handleChapterChange = async (newIdx) => {
     if (!currentStory || newIdx < 0 || newIdx >= currentStory.chapters.length) return
     window.speechSynthesis.cancel()
@@ -304,6 +316,12 @@ export default function StoryStudio() {
     setIsPlaying(false)
     stop()
     setShowSummary(false)
+
+    const leaving = currentStory.chapters[currentChapterIdx]
+    if (leaving && currentChapterIdx !== newIdx) {
+      const body = leaving.text.replace(/^Kapitel[^\n]+\n?/i, '')
+      await recordStoryChapterEncounters(currentStory.id, currentChapterIdx, body)
+    }
 
     // Award XP for reading a chapter
     const session = await getTodaySession()
@@ -394,6 +412,34 @@ export default function StoryStudio() {
     }
     setRegenLoadingId(null)
   }
+
+  const handleMineClozes = async () => {
+    const ch = currentStory?.chapters?.[currentChapterIdx]
+    if (!currentStory || !ch) return
+    setMineBusy(true)
+    try {
+      const body = ch.text.replace(/^Kapitel[^\n]+\n?/i, '')
+      const n = await mineChapterClozes(currentStory.id, ch.title, body, 8)
+      await loadKnownWords()
+      showAppToast(
+        n > 0
+          ? `Mined ${n} cloze ${n === 1 ? 'card' : 'cards'} — they appear in Flashcards.`
+          : 'No new cloze cards. Add words to your vault or try another chapter.'
+      )
+    } catch (e) {
+      showAppToast(`Mining failed: ${e.message}`)
+    }
+    setMineBusy(false)
+  }
+
+  const readerChapter = view === 'reader' && currentStory
+    ? currentStory.chapters[currentChapterIdx]
+    : null
+  const coverage = useMemo(() => {
+    if (!readerChapter) return null
+    const body = readerChapter.text.replace(/^Kapitel[^\n]+\n?/i, '')
+    return estimateLexicalCoverage(body, knownWordsSet)
+  }, [readerChapter, knownWordsSet])
 
   // LIBRARY VIEW
   if (view === 'library') {
@@ -648,7 +694,8 @@ export default function StoryStudio() {
       {/* Top bar */}
       <div className="flex items-center gap-3 mb-6">
         <button
-          onClick={() => {
+          onClick={async () => {
+            await flushChapterEncounters()
             window.speechSynthesis.cancel()
             germanVoice.stop()
             playbackStateRef.current = 'stopped'
@@ -694,7 +741,39 @@ export default function StoryStudio() {
           animate={{ opacity: 1, y: 0 }}
           className="card p-6 md:p-8"
         >
-          <h3 className="text-xl font-bold text-white mb-6">{chapter.title}</h3>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+            <h3 className="text-xl font-bold text-white">{chapter.title}</h3>
+            {coverage && (
+              <div className="flex items-center gap-2 text-xs text-slate-400">
+                <BarChart3 size={14} className="text-brand-400 shrink-0" />
+                <span>
+                  ~{coverage.percent}% of tokens in your vault ({coverage.known}/{coverage.total})
+                </span>
+                {coverage.percent >= 95 && (
+                  <span className="text-green-400/90">· strong coverage</span>
+                )}
+                {coverage.percent < 85 && (
+                  <span className="text-amber-400/90">· add vocab or lower level</span>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap gap-2 mb-4">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={mineBusy}
+              onClick={handleMineClozes}
+              icon={mineBusy ? <Loader2 size={14} className="animate-spin" /> : <Pickaxe size={14} />}
+            >
+              {mineBusy ? 'Mining…' : 'Mine cloze cards'}
+            </Button>
+            <span className="text-[11px] text-slate-500 self-center">
+              Sentence cards for Flashcards (from this chapter)
+            </span>
+          </div>
 
           <StoryText
             text={chapter.text.replace(/^Kapitel[^\n]+\n?/i, '')}

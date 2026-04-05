@@ -86,31 +86,94 @@ async function invokeDeepSeek({ systemPrompt, userPrompt, messages, temperature 
   return deepSeekFetch(msgs, null, temperature, maxTokens)
 }
 
+function stripStorySummariesForLangCheck(text) {
+  return (text || '').replace(/\[ENGLISH_SUMMARY:[^\]]+\]/gi, ' ')
+}
+
+/** Reject stories where the model wrote English narrative (common failure mode). */
+function isProbablyGermanStory(text) {
+  const body = stripStorySummariesForLangCheck(text).slice(0, 3500).toLowerCase()
+  const deHits = (body.match(/\b(der|die|das|und|ich|ist|nicht|ein|eine|zu|mit|für|sie|er|es|wir|haben|hat|war|wenn|auch|nur|noch|dem|den|des|vom|zum|zur|aber|oder|dann|hier|da|wie|was|wo)\b/g) || []).length
+  const enHits = (body.match(/\b(the|and|was|for|with|from|they|went|gone|shadow|travel|center|elephant|chapter|search|truth|character)\b/g) || []).length
+  const uml = (body.match(/[äöüß]/g) || []).length
+  const tokenCount = (body.match(/[a-zäöüß]+/gi) || []).length
+  if (tokenCount < 25) return false
+  return deHits >= 10 && deHits >= enHits * 1.15 && (uml >= 2 || deHits >= 15)
+}
+
 export async function generateStory({ theme, words, level, chapterCount = 6, previousTopicWords = [] }) {
   const wordList = shuffleArray(words).slice(0, 200)
     .map(w => `${w.german} (${w.translation})`).join(', ')
 
-  const systemPrompt = `You are a German language story generator for a learner at ${level} level trying to reach B2. You write engaging, immersive German mini-novels that naturally incorporate vocabulary the learner already knows, making them feel successful and confident. Your stories are vivid, emotional, and genuinely interesting — not textbook boring.
+  const systemPrompt = `You are a German language story generator for a learner at ${level} level. You write engaging German mini-novels.
 
-IMPORTANT: Return plain text only. No markdown formatting. No asterisks, no bold, no headers with #. Just clean German prose.`
+STRICT RULES:
+- Every line of story narration and dialogue MUST be German. Never write English paragraphs for the story itself.
+- English is allowed ONLY inside tags: [ENGLISH_SUMMARY: ...] after each chapter.
+- Return plain text only. No markdown, no # headers, no asterisks.`
 
   const userPrompt = `Write a German story with exactly ${chapterCount} chapters (Kapitel 1 through ${chapterCount}) on the theme: "${theme}".
 
 REQUIREMENTS:
-- Total length: 800–1200 German words
-- Each chapter: 130–200 words, titled "Kapitel N: [Creative German Title]"
-- Language level: ${level} — use mostly simple, clear German with some B1-B2 vocabulary for stretch
-- Naturally weave in as many of these vocabulary words as possible: ${wordList}
-- Use vocabulary that appeared in the learner's previous story on this topic: ${previousTopicWords.join(', ') || 'none available yet'}. This is deliberate narrow reading practice.
-- Make it COMPELLING — real characters, real conflict, real emotion
-- Vary sentence length. Use both simple and complex sentences.
-- After EVERY chapter, add a line: [ENGLISH_SUMMARY: one sentence summary of what happened]
+- Total length: 800–1200 words of GERMAN prose (not English).
+- Each chapter: 130–200 words, titled "Kapitel N: [German Title]"
+- Language level: ${level}
+- Naturally weave in vocabulary where possible: ${wordList}
+- Previous-topic words to recycle: ${previousTopicWords.join(', ') || 'none yet'}
+- After EVERY chapter, one line only: [ENGLISH_SUMMARY: one English sentence]
 - Separate chapters with: ---CHAPTER---
 
-Write ONLY the story. No meta-commentary. Start directly with "Kapitel 1:"`
+Write ONLY the story in German (plus summary lines). Start with "Kapitel 1:"`
 
-  const raw = await invokeDeepSeek({ systemPrompt, userPrompt, temperature: 0.85, maxTokens: 4000 })
-  return cleanMarkdown(raw)
+  let raw = cleanMarkdown(await invokeDeepSeek({ systemPrompt, userPrompt, temperature: 0.72, maxTokens: 4000 }))
+  if (!isProbablyGermanStory(raw)) {
+    const fixPrompt = `${userPrompt}
+
+CRITICAL FIX: Your previous draft failed language check (too much English in the body). Rewrite the entire story: German only for all story text. English only in [ENGLISH_SUMMARY: ...] lines.`
+    raw = cleanMarkdown(await invokeDeepSeek({ systemPrompt, userPrompt: fixPrompt, temperature: 0.38, maxTokens: 4000 }))
+  }
+  return raw
+}
+
+const AUDIT_BATCH = 40
+
+/**
+ * @param {Array<{german: string, translation?: string}>} wordsSlice
+ * @returns {Promise<Array<{ index: number, band: string, note: string }>>}
+ */
+export async function auditVocabularyFrequency(wordsSlice) {
+  const list = (wordsSlice || []).filter((w) => w?.german?.trim()).slice(0, AUDIT_BATCH)
+  if (!list.length) return []
+  const lines = list.map((w, i) => `${i + 1}. ${w.german.trim()} — ${(w.translation || '').trim()}`).join('\n')
+  const userPrompt = `You judge German vocabulary for a learner targeting B2 reading. For each numbered item, the LEFT side should be German (if it looks like English, say so in the note).
+
+Return ONLY valid JSON:
+{"results":[{"index":1,"band":"core"|"useful"|"niche"|"noise","note":"max 12 words"}]}
+
+Bands:
+- core = top-frequency / essential for news & conversation
+- useful = good to know, fair frequency
+- niche = rare but valid (names of things, rare idioms)
+- noise = likely typo, Duolingo glitch, not real German, or English stored wrong
+
+Items:
+${lines}`
+
+  const result = await invokeDeepSeek({ userPrompt, temperature: 0.15, maxTokens: 2000 })
+  try {
+    const cleaned = result.trim().replace(/^```json\n?/, '').replace(/\n?```$/, '')
+    const parsed = JSON.parse(cleaned)
+    return Array.isArray(parsed.results) ? parsed.results : []
+  } catch {
+    return []
+  }
+}
+
+export async function generateExampleSentenceForWord(german, translation, cefrLevel = 'A1') {
+  const g = String(german || '').trim()
+  if (!g) throw new Error('No word')
+  const userPrompt = `One natural German sentence (max 14 words) that uses "${g}" (${translation || 'learner word'}). About CEFR ${cefrLevel}. Plain text German only — no quotes, no English, no explanation.`
+  return cleanMarkdown(await invokeDeepSeek({ userPrompt, temperature: 0.45, maxTokens: 100 }))
 }
 
 export async function explainUnknownWords(unknownWords) {
@@ -220,6 +283,28 @@ Return ONLY valid JSON (no markdown, no backticks):
 export async function explainGrammarFocus(focus) {
   const userPrompt = `Explain German ${focus.replace(/_/g, ' ')} to a B1 learner in 150 words maximum. Be clear and direct. Include 2 example sentences. No markdown headers.`
   const raw = await invokeDeepSeek({ userPrompt, temperature: 0.2, maxTokens: 300 })
+  return cleanMarkdown(raw)
+}
+
+/** Short feedback on learner German production (Swain / output hypothesis). */
+export async function reviewGermanProduction(germanText, promptEn, learnerCefr = 'A1') {
+  const trimmed = (germanText || '').trim()
+  if (!trimmed) throw new Error('Write something in German first.')
+
+  const userPrompt = `A German learner (long-term goal B2) is currently about CEFR ${learnerCefr} (from SRS progress in the app). They were given this task in English:
+"""${promptEn}"""
+
+They wrote this in German:
+"""${trimmed}"""
+
+Reply in English only. Keep it under 130 words. Structure:
+1) One line on what works well for their CURRENT level (${learnerCefr}) — do not judge them as if they were already B2.
+2) 1–3 gentle corrections (quote short fixed German fragments where helpful).
+3) One encouraging closing line.
+
+If the text is very short or mostly English, say so kindly and suggest 2–4 more German sentences at their level.`
+
+  const raw = await invokeDeepSeek({ userPrompt, temperature: 0.35, maxTokens: 400 })
   return cleanMarkdown(raw)
 }
 

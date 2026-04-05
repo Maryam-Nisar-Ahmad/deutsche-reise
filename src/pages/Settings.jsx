@@ -33,7 +33,10 @@ function Section({ title, icon: Icon, children }) {
 }
 
 export default function Settings() {
-  const { apiKey, setApiKey, newCardsPerDay, setNewCardsPerDay, darkMode, setDarkMode, dailyXPGoal, setDailyXPGoal } = useSettings()
+  const {
+    apiKey, setApiKey, newCardsPerDay, setNewCardsPerDay, darkMode, setDarkMode,
+    dailyXPGoal, setDailyXPGoal, targetRetention, setTargetRetention,
+  } = useSettings()
   const { voices, selectedVoiceURI, changeVoice, rate, changeRate } = useVoice()
 
   const [showKey, setShowKey] = useState(false)
@@ -110,6 +113,7 @@ export default function Settings() {
         newCardsPerDay,
         dailyXPGoal,
         startDate,
+        targetRetention,
       }
     }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
@@ -130,6 +134,11 @@ export default function Settings() {
         const data = JSON.parse(ev.target.result)
         if (data.words) {
           const result = await importWords(data.words)
+          const t = data.settings?.targetRetention
+          if (t != null) {
+            const v = parseFloat(t)
+            if (Number.isFinite(v) && v >= 0.8 && v <= 0.97) setTargetRetention(v)
+          }
           alert(`Imported ${result.added} words, ${result.skipped} already existed.`)
         }
       } catch {
@@ -378,6 +387,29 @@ export default function Settings() {
               className="input-field w-24 text-center"
             />
             <span className="text-sm text-slate-400">cards (5–30)</span>
+          </div>
+        </div>
+
+        <div>
+          <label className="text-sm text-slate-400 block mb-1.5">SRS retention target</label>
+          <p className="text-xs text-slate-500 mb-2">
+            ~90% is the usual sweet spot; higher means more daily reviews. Used to scale review intervals.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {[0.85, 0.88, 0.9, 0.93].map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setTargetRetention(t)}
+                className={`px-3 py-2 rounded-xl text-sm font-medium transition-all ${
+                  Math.abs(targetRetention - t) < 0.01
+                    ? 'bg-brand-500 text-white'
+                    : 'bg-surface-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                {Math.round(t * 100)}%
+              </button>
+            ))}
           </div>
         </div>
 

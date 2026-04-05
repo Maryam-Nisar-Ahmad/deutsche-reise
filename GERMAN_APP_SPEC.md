@@ -1,4 +1,4 @@
-# Deutsche Reise — Complete Implementation Specification
+# Deutsche Reise: Complete Implementation Specification
 ## A Research-Proven German Learning App
 
 ---
@@ -9,7 +9,7 @@ Build a **web app** called **"Deutsche Reise"** (German Journey) that takes the 
 
 ---
 
-## TECH STACK — USE EXACTLY THESE
+## TECH STACK: USE EXACTLY THESE
 
 | Layer | Choice | Reason |
 |---|---|---|
@@ -130,7 +130,7 @@ src/
 ├── App.jsx
 ├── index.css
 ├── lib/
-│   ├── db.js              # IndexedDB — all persistent data
+│   ├── db.js              # IndexedDB (all persistent data)
 │   ├── srs.js             # SM-2 spaced repetition algorithm
 │   ├── deepseek.js        # DeepSeek API client
 │   ├── wordParser.js      # Parse Duolingo word list format
@@ -176,7 +176,7 @@ src/
 
 ---
 
-## DATABASE SCHEMA — `src/lib/db.js`
+## DATABASE SCHEMA: `src/lib/db.js`
 
 Use `idb` to create and manage an IndexedDB database called `deutsche-reise-db` version 1.
 
@@ -189,7 +189,7 @@ Each word the user has added. Key: `id` (autoIncrement).
   id: Number,                    // autoincrement primary key
   german: String,                // "Hausarbeit"
   translation: String,           // "chores"
-  normalizedKey: String,         // "hausarbeit" (lowercase, trimmed — for dedup)
+  normalizedKey: String,         // "hausarbeit" (lowercase, trimmed, for dedup)
   addedAt: Number,               // Date.now()
   source: String,                // "import" | "manual" | "story_lookup"
   gender: String | null,         // "der" | "die" | "das" | null (set by AI lookup)
@@ -246,7 +246,7 @@ Key: `id` (autoIncrement).
   focus: String,                 // "cases" | "konjunktiv_II" | "passive" | etc.
   questions: Array,              // raw questions from DeepSeek
   answers: Array,                // user's answers
-  score: Number,                 // 0–100
+  score: Number,                 // 0 to 100
   completedAt: Number,
 }
 ```
@@ -304,9 +304,9 @@ export async function getStudyStreakDays() { ... }
 
 ---
 
-## SM-2 ALGORITHM — `src/lib/srs.js`
+## SM-2 ALGORITHM: `src/lib/srs.js`
 
-Implement the SM-2 algorithm exactly as described by Wozniak (1987), with four rating buttons instead of the classic 0–5 scale:
+Implement the SM-2 algorithm exactly as described by Wozniak (1987), with four rating buttons instead of the classic 0 to 5 scale:
 
 ```
 Rating 1 = "Forgot"    → maps to quality 0
@@ -371,13 +371,13 @@ export function estimateRetention(card) {
 
 ### Daily Card Limit Logic
 - Default: 15 new cards/day + all due reviews
-- User can change in Settings (range: 5–30)
+- User can change in Settings (range: 5 to 30)
 - Enforce new card limit strictly; never limit due reviews
 - "New" cards are introduced at START of session, then reviews
 
 ---
 
-## WORD PARSER — `src/lib/wordParser.js`
+## WORD PARSER: `src/lib/wordParser.js`
 
 Parse the user's Duolingo word list (the format in words.txt: German line, English line, blank line, repeat).
 
@@ -404,7 +404,7 @@ export function normalizeGerman(word) {
 
 ---
 
-## DEEPSEEK CLIENT — `src/lib/deepseek.js`
+## DEEPSEEK CLIENT: `src/lib/deepseek.js`
 
 All AI calls go through this module. API key comes from localStorage key `dr_api_key`.
 
@@ -451,22 +451,22 @@ async function callDeepSeek({ systemPrompt, userPrompt, temperature = 0.7, maxTo
 
 ```js
 export async function generateStory({ theme, words, level, chapterCount = 6 }) {
-  // words: array of { german, translation } — shuffle before sending, cap at 200 for prompt length
+  // words: array of { german, translation }, shuffle before sending, cap at 200 for prompt length
   // level: "A1-A2" | "A2-B1" | "B1-B2"
   
   const wordList = shuffleArray(words).slice(0, 200)
     .map(w => `${w.german} (${w.translation})`).join(', ')
   
-  const systemPrompt = `You are a German language story generator for a learner at ${level} level trying to reach B2. You write engaging, immersive German mini-novels that naturally incorporate vocabulary the learner already knows, making them feel successful and confident. Your stories are vivid, emotional, and genuinely interesting — not textbook boring.`
+  const systemPrompt = `You are a German language story generator for a learner at ${level} level trying to reach B2. You write engaging, immersive German mini-novels that naturally incorporate vocabulary the learner already knows, making them feel successful and confident. Your stories are vivid, emotional, and genuinely interesting. Not textbook boring.`
   
   const userPrompt = `Write a German story with exactly ${chapterCount} chapters (Kapitel 1 through ${chapterCount}) on the theme: "${theme}".
 
 REQUIREMENTS:
-- Total length: 800–1200 German words
-- Each chapter: 130–200 words, titled "Kapitel N: [Creative German Title]"
-- Language level: ${level} — use mostly simple, clear German with some B1-B2 vocabulary for stretch
+- Total length: 800 to 1200 German words
+- Each chapter: 130 to 200 words, titled "Kapitel N: [Creative German Title]"
+- Language level: ${level}, use mostly simple, clear German with some B1-B2 vocabulary for stretch
 - Naturally weave in as many of these vocabulary words as possible: ${wordList}
-- Make it COMPELLING — real characters, real conflict, real emotion
+- Make it COMPELLING: real characters, real conflict, real emotion
 - Vary sentence length. Use both simple and complex sentences.
 - After EVERY chapter, add a line: [ENGLISH_SUMMARY: one sentence summary of what happened]
 - Separate chapters with: ---CHAPTER---
@@ -508,10 +508,10 @@ Context sentence: "${context || 'none'}"
 
 Provide ALL of the following, clearly labeled:
 GERMAN: ${germanWord}
-GENDER & PLURAL: (if noun — der/die/das, plural form)
+GENDER & PLURAL: (if noun, der/die/das, plural form)
 MEANING: (English translation, 1-3 words)
 FULL MEANING: (2-3 sentence English explanation of nuance, usage, common contexts)
-EXAMPLE 1: (German sentence using this word — B1 level)
+EXAMPLE 1: (German sentence using this word, B1 level)
 EXAMPLE 2: (Different German sentence, different context)
 MEMORY TIP: (One vivid mnemonic or association to remember this word)
 RELATED WORDS: (2-3 related German words or common phrases)
@@ -584,13 +584,13 @@ Return ONLY valid JSON (no markdown, no backticks):
 
 ```js
 export async function explainGrammarFocus(focus) {
-  // Returns a concise, clear explanation with examples — for the grammar gym header
+  // Returns a concise, clear explanation with examples, for the grammar gym header
   const userPrompt = `Explain German ${focus} to a B1 learner in 150 words maximum. Be clear and direct. Include 2 example sentences. No markdown headers.`
   return callDeepSeek({ userPrompt, temperature: 0.2, maxTokens: 300 })
 }
 ```
 
-### Chat Tutor (bonus feature — AI conversation)
+### Chat Tutor (bonus feature, AI conversation)
 
 ```js
 export async function chatWithTutor(messages, userLevel) {
@@ -613,9 +613,9 @@ Rules:
 
 ---
 
-## WEB SPEECH API — `src/lib/voice.js`
+## WEB SPEECH API: `src/lib/voice.js`
 
-This is the voice the user already loves — the browser's built-in German de-DE voice. Preserve all the behavior from the old app that worked well.
+This is the voice the user already loves: the browser's built-in German de-DE voice. Preserve all the behavior from the old app that worked well.
 
 ```js
 export class GermanVoice {
@@ -745,7 +745,7 @@ export const germanVoice = new GermanVoice()
 
 ---
 
-## LEVEL CALCULATION — `src/lib/levelCalc.js`
+## LEVEL CALCULATION: `src/lib/levelCalc.js`
 
 ```js
 // Based on Milton & Alexiou (2009) vocabulary-CEFR research
@@ -839,7 +839,7 @@ import { useMemo } from 'react'
 // Streak uses localStorage keys:
 // dr_streak_count (number)
 // dr_streak_last_date ("YYYY-MM-DD")
-// dr_streak_grace_used (boolean — for grace day)
+// dr_streak_grace_used (boolean, for grace day)
 
 function todayStr() {
   return new Date().toISOString().split('T')[0]
@@ -868,7 +868,7 @@ export function useStreak() {
       localStorage.setItem('dr_streak_count', count + 1)
       localStorage.setItem('dr_streak_grace_used', 'false')
     } else if (lastDate === dbStr && !graceUsed) {
-      // Missed yesterday but grace day applies — keep streak
+      // Missed yesterday but grace day applies, keep streak
       localStorage.setItem('dr_streak_count', count + 1)
       localStorage.setItem('dr_streak_grace_used', 'true')
     } else {
@@ -923,11 +923,11 @@ export function useSettings() {
 
 ---
 
-## PAGES — DETAILED SPECIFICATION
+## PAGES: DETAILED SPECIFICATION
 
 ---
 
-### PAGE 1: `Dashboard.jsx` — Home Screen
+### PAGE 1: `Dashboard.jsx` (Home Screen)
 
 **Purpose:** The first screen the user sees every day. Shows their streak, level, what's due, and guides them through their daily session.
 
@@ -935,10 +935,10 @@ export function useSettings() {
 
 **Components to render:**
 
-#### Top Banner — Greeting & Streak
+#### Top Banner (Greeting & Streak)
 - Large German greeting that changes by time of day:
   - Before noon: "Guten Morgen!" 
-  - Noon–5pm: "Guten Tag!"
+  - Noon to 5pm: "Guten Tag!"
   - After 5pm: "Guten Abend!"
 - User's current streak as a flame 🔥 icon + number
 - If streak is active today: green flame, else grey
@@ -951,15 +951,15 @@ export function useSettings() {
 - Pull data from: `getWordCount()`, then `getLevel()` and `getProgressToNextLevel()`
 - Target reminder: "Goal: B2 by [date 7 months from first launch]"
 
-#### Daily Plan Card — The heart of the dashboard
+#### Daily Plan Card (the heart of the dashboard)
 Research basis: Baddeley & Longman (1978) show multiple shorter sessions outperform marathon sessions. Daily plan distributes across 4 activity types.
 
 Show a checklist of today's activities:
 ```
-□ 🃏 Flashcard Review   — [N] due today        [START]
-□ 📚 Read Story         — Chapter [N] of "[title]" [CONTINUE]  
-□ 🏋️ Grammar Gym       — [Focus topic]           [START]
-□ 🎙️ Shadowing         — 10 min with today's story [START]
+□ 🃏 Flashcard Review   : [N] due today        [START]
+□ 📚 Read Story         : Chapter [N] of "[title]" [CONTINUE]  
+□ 🏋️ Grammar Gym       : [Focus topic]           [START]
+□ 🎙️ Shadowing         : 10 min with today's story [START]
 ```
 - Each row has a checkbox that turns green when completed
 - Tap [START] to navigate to that page
@@ -967,17 +967,17 @@ Show a checklist of today's activities:
 - At top: "XP Today: 120 / 300"
 
 #### Stats Strip (4 cards in a row)
-1. **Words Known** — total word count from DB
-2. **Due Today** — SRS cards due
-3. **Days Streak** — current streak
-4. **Time Today** — minutes studied today (tracked in daily_sessions)
+1. **Words Known**: total word count from DB
+2. **Due Today**: SRS cards due
+3. **Days Streak**: current streak
+4. **Time Today**: minutes studied today (tracked in daily_sessions)
 
 #### Weekly Heatmap
-- 7 boxes, one per day (Mon–Sun, current week)
+- 7 boxes, one per day (Mon to Sun, current week)
 - Color intensity based on XP earned that day:
   - 0 XP: dark grey
-  - 1–50 XP: dim green
-  - 51–150 XP: medium green
+  - 1 to 50 XP: dim green
+  - 51 to 150 XP: medium green
   - 150+ XP: bright green
 - Tooltip on hover: "[Day]: [XP] XP, [N] words reviewed"
 
@@ -989,7 +989,7 @@ Show a checklist of today's activities:
 
 ---
 
-### PAGE 2: `Flashcards.jsx` — SRS Review Session
+### PAGE 2: `Flashcards.jsx` (SRS Review Session)
 
 **Purpose:** Daily vocabulary review using the SM-2 algorithm. This is the core retention engine.
 
@@ -1003,7 +1003,7 @@ Show a checklist of today's activities:
   Due cards: 23  |  New cards today: 15/15
   [Start Session] button
 
-[Card screen — the main view]
+[Card screen (the main view)]
 
 [Post-session screen]
   Summary stats
@@ -1016,14 +1016,14 @@ Show a checklist of today's activities:
 - Option: "Only Reviews" | "Only New" | "Both" toggle
 - Small info text: "Reviewing [N] due + [N] new words today"
 
-#### Card Screen — Main Review UI
+#### Card Screen (Main Review UI)
 
 Layout:
 ```
 Progress bar at top (cards remaining / total)
-[Card face] — flippable
+[Card face], flippable
 [Show Answer] button → flips card
-[Rating buttons] — appear after flip
+[Rating buttons], appear after flip
 ```
 
 **Card Front (German → English mode):**
@@ -1032,11 +1032,11 @@ Progress bar at top (cards remaining / total)
 - If word has gender stored: show "der/die/das" in subtle color
 - Current interval shown subtly: "Last reviewed: 3 days ago"
 
-**Card Front (English → German mode — alternates):**
+**Card Front (English → German mode, alternates):**
 - Large English translation
 - "What's the German word?"
 
-**Card Back (after flip — using Framer Motion card flip animation):**
+**Card Back (after flip, using Framer Motion card flip animation):**
 - German word + translation visible
 - Example sentence if available (show the stored `example` field)
 - Speaker icon to hear the full example sentence
@@ -1079,7 +1079,7 @@ Call `updateCardAfterReview(wordId, quality)` and move to next card.
 
 ---
 
-### PAGE 3: `StoryStudio.jsx` — Generate & Read Stories
+### PAGE 3: `StoryStudio.jsx` (Generate & Read Stories)
 
 **Purpose:** Generate AI stories using the user's vocabulary, read them with TTS, enable shadowing. This is the comprehensible input + listening + shadowing module.
 
@@ -1090,7 +1090,7 @@ Call `updateCardAfterReview(wordId, quality)` and move to next card.
 #### Library View (default when no story is open)
 
 - Header: "Story Studio" with subtitle "Immerse yourself in German"
-- **Generate New Story button** — opens a modal:
+- **Generate New Story button**, opens a modal:
   ```
   Story Generator Modal:
   - Theme input (text): "What should the story be about?"
@@ -1185,7 +1185,7 @@ When shadow mode is ON:
 2. Story text shows one sentence at a time (current sentence big, rest dimmed)
 3. Sequence per sentence:
    a. Show sentence in German
-   b. [▶ Listen] button — plays the sentence via TTS
+   b. [▶ Listen] button, plays the sentence via TTS
    c. After TTS finishes: auto-show [🎙️ Repeat] button with 3-second countdown circle
    d. 3 seconds for user to repeat the sentence aloud
    e. Then auto-advance to next sentence, OR user presses [Next]
@@ -1202,11 +1202,11 @@ After shadowing a chapter: +25 XP and update `shadowingMinutes` in daily session
 
 ---
 
-### PAGE 4: `GrammarGym.jsx` — Grammar Exercises
+### PAGE 4: `GrammarGym.jsx` (Grammar Exercises)
 
 **Purpose:** Targeted grammar practice based on German B2 requirements. Interleaved practice after initial blocking (Nakata & Suzuki 2019).
 
-**Research basis:** Norris & Ortega (2000) — explicit instruction produces large, durable gains. DeKeyser (2025) — declarative knowledge must be proceduralized through practice.
+**Research basis:** Norris & Ortega (2000): explicit instruction produces large, durable gains. DeKeyser (2025): declarative knowledge must be proceduralized through practice.
 
 **Layout:** Two-panel on desktop. Left: grammar topic list. Right: exercise area.
 
@@ -1218,33 +1218,33 @@ Each topic is a card with:
 - "Last practiced" date
 - Score from last session (e.g., "7/8 correct")
 
-Topics to include (in this order — progression from foundation to B2):
+Topics to include (in this order, progression from foundation to B2):
 ```
 Foundation (always do these first):
-  1. Present Tense (Präsens)         — A1
-  2. Articles & Gender               — A1
-  3. Basic Sentence Order            — A1
-  4. Nominative Case                 — A1
+  1. Present Tense (Präsens)        : A1
+  2. Articles & Gender               : A1
+  3. Basic Sentence Order            : A1
+  4. Nominative Case                 : A1
 
 Building (A2):
-  5. Accusative Case                 — A2
-  6. Dative Case                     — A2  
-  7. Perfekt (Past Tense)            — A2
-  8. Modal Verbs                     — A2
+  5. Accusative Case                 : A2
+  6. Dative Case                     : A2  
+  7. Perfekt (Past Tense)            : A2
+  8. Modal Verbs                     : A2
 
 Intermediate (B1):
-  9. Adjective Endings               — B1
-  10. Two-Way Prepositions           — B1
-  11. Word Order (Subordinate)       — B1
-  12. Präteritum                     — B1
+  9. Adjective Endings               : B1
+  10. Two-Way Prepositions           : B1
+  11. Word Order (Subordinate)       : B1
+  12. Präteritum                     : B1
 
 Advanced (B2):
-  13. Konjunktiv II                  — B2
-  14. Passive Voice                  — B2
-  15. Konjunktiv I (Reported Speech) — B2
-  16. Relative Clauses               — B2
-  17. Genitive Case                  — B2
-  18. Infinitive Constructions       — B2
+  13. Konjunktiv II                  : B2
+  14. Passive Voice                  : B2
+  15. Konjunktiv I (Reported Speech) : B2
+  16. Relative Clauses               : B2
+  17. Genitive Case                  : B2
+  18. Infinitive Constructions       : B2
 ```
 
 **Topic Discovery:** User picks any topic. A "Recommended" badge appears on topics where SRS shows low accuracy words that likely need that grammar.
@@ -1315,7 +1315,7 @@ Opens a small chat panel:
 
 ---
 
-### PAGE 5: `VocabVault.jsx` — Vocabulary Manager
+### PAGE 5: `VocabVault.jsx` (Vocabulary Manager)
 
 **Purpose:** Import, browse, search, and manage all vocabulary. Gateway for adding new words.
 
@@ -1355,13 +1355,13 @@ Total: 1,031  |  Mastered: 234  |  Learning: 445  |  New: 352
 ```
 
 #### Export Options
-- [Copy German Only] — clipboard
-- [Copy Pairs] — clipboard  
-- [Download .txt] — file download
+- [Copy German Only]: clipboard
+- [Copy Pairs]: clipboard  
+- [Download .txt]: file download
 
 ---
 
-### PAGE 6: `Settings.jsx` — Configuration
+### PAGE 6: `Settings.jsx` (Configuration)
 
 **Purpose:** API key entry, voice configuration, daily targets, app preferences.
 
@@ -1374,11 +1374,11 @@ Total: 1,031  |  Mastered: 234  |  Learning: 445  |  New: 352
 #### Voice Settings
 - Voice dropdown: all German de-DE browser voices (reload if empty)
 - "Test Voice" button: says "Guten Tag! Ich heiße Deutsche Reise."
-- Speed slider: 0.6 — 1.2 (default 0.85)
+- Speed slider: 0.6 to 1.2 (default 0.85)
 - Preview the selected voice instantly on slider change
 
 #### Study Settings
-- New cards per day: number input (5–30, default 15)
+- New cards per day: number input (5 to 30, default 15)
 - Daily XP goal: 100 | 200 | 300 | 500 (select)
 - Session reminder: browser notification time picker
 
@@ -1388,16 +1388,16 @@ Total: 1,031  |  Mastered: 234  |  Learning: 445  |  New: 352
 - "Days remaining" shown
 
 #### Data Management
-- [Export All Data] — downloads JSON with all words + SRS cards
-- [Import Backup] — restores from JSON
-- [Reset Progress] — wipe SRS data only (keep words)
-- [Clear Everything] — nuclear option with "Are you sure?" confirmation
+- [Export All Data]: downloads JSON with all words + SRS cards
+- [Import Backup]: restores from JSON
+- [Reset Progress]: wipe SRS data only (keep words)
+- [Clear Everything]: nuclear option with "Are you sure?" confirmation
 
 ---
 
-## LAYOUT — `src/components/Layout.jsx` & `Sidebar.jsx`
+## LAYOUT: `src/components/Layout.jsx` & `Sidebar.jsx`
 
-### Sidebar (desktop — fixed left, 240px wide)
+### Sidebar (desktop, fixed left, 240px wide)
 
 ```
 ┌────────────────────┐
@@ -1435,7 +1435,7 @@ Fixed bottom, 5 icons.
 ### Top Bar
 - Page title (left)
 - XP today indicator (center): "⚡ 120 XP today"
-- Notification bell (right) — shows if cards are due
+- Notification bell (right), shows if cards are due
 
 ---
 
@@ -1462,7 +1462,7 @@ Fixed bottom, 5 icons.
 
 **Level-up notification:**
 - When word count crosses a threshold: full-screen celebration:
-  - Confetti animation (CSS-only — no library)
+  - Confetti animation (CSS-only, no library)
   - "Du bist jetzt [Level]! 🎉"
   - Big XP burst
 
@@ -1470,7 +1470,7 @@ Fixed bottom, 5 icons.
 
 ## VISUAL DESIGN SYSTEM
 
-### Colors (dark theme — default)
+### Colors (dark theme, default)
 ```
 Background:      #020617 (surface-950)
 Card background: #0f172a (surface-900)
@@ -1513,7 +1513,7 @@ Hover state: `border-color: #0c8ee3` (brand highlight)
 
 ---
 
-## APP.JSX — ROUTING
+## APP.JSX: ROUTING
 
 ```jsx
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
@@ -1569,7 +1569,7 @@ Page 2: API Key
 
 Page 3: Import Words
   "Import your Duolingo vocabulary"
-  [Large textarea — paste your word list]
+  [Large textarea (paste your word list)]
   [📁 Upload words.txt]
   Shows live count: "1,031 words detected"
   [Import & Continue →]
@@ -1577,7 +1577,7 @@ Page 3: Import Words
 Page 4: Voice Setup
   "Choose your German voice"
   [Voice dropdown]
-  [▶ Test Voice] — plays "Guten Tag! Ich freue mich, mit dir Deutsch zu lernen."
+  [▶ Test Voice], plays "Guten Tag! Ich freue mich, mit dir Deutsch zu lernen."
   Speed slider
   [Continue →]
 
@@ -1647,72 +1647,3 @@ All pages fully functional on mobile (375px+):
 - Import: textarea + file upload both work on mobile
 
 ---
-
-## CURSOR PROMPT
-
-Paste the following as a prompt to Cursor when opening the clean folder:
-
----
-
-```
-I want you to build a German language learning web app called "Deutsche Reise" exactly as specified in the GERMAN_APP_SPEC.md file in this folder.
-
-Here is what to do:
-
-1. Read GERMAN_APP_SPEC.md completely before writing any code.
-
-2. Set up the project:
-   - Run: npm create vite@latest . -- --template react
-   - Install all dependencies listed in the spec
-   - Configure Tailwind CSS exactly as specified
-
-3. Build in this order:
-   a. src/lib/db.js — IndexedDB setup with all stores and functions
-   b. src/lib/srs.js — SM-2 algorithm
-   c. src/lib/wordParser.js — Duolingo word parser
-   d. src/lib/deepseek.js — All DeepSeek API functions
-   e. src/lib/voice.js — Web Speech API GermanVoice class
-   f. src/lib/levelCalc.js — CEFR level calculator
-   g. src/hooks/ — all three hooks
-   h. src/index.css — Tailwind directives + custom CSS
-   i. src/App.jsx — Router setup
-   j. src/components/Layout.jsx + Sidebar.jsx
-   k. src/pages/Dashboard.jsx
-   l. src/pages/VocabVault.jsx (needed early — import words here)
-   m. src/pages/Flashcards.jsx
-   n. src/pages/StoryStudio.jsx
-   o. src/pages/GrammarGym.jsx
-   p. src/pages/Settings.jsx
-   q. src/components/ — all sub-components as needed by each page
-   r. Onboarding flow (first-launch detection + 5-page wizard)
-
-4. Important rules:
-   - NO backend, NO user accounts, NO external auth
-   - ALL data in IndexedDB and localStorage — browser only
-   - Voice MUST use the browser's built-in Web Speech API (window.speechSynthesis) with lang='de-DE'
-   - AI calls ONLY to DeepSeek API (deepseek-chat model) — never use any other AI
-   - Dark theme by default (html class="dark")
-   - Mobile-first responsive design using Tailwind
-   - Use Framer Motion for the flashcard flip animation and page transitions
-   - Use lucide-react for all icons
-
-5. The words.txt file in this folder contains the user's Duolingo vocabulary in the format:
-   German word (line 1)
-   English translation (line 2)
-   blank line
-   German word (line 1)
-   ...
-   There are ~1,031 word pairs. Parse this format in wordParser.js and auto-import it on first launch (during onboarding step 3).
-
-6. Make it beautiful. Dark, premium-looking UI with the colors in the spec. This should feel like a polished product, not a prototype. Rounded cards, smooth animations, good spacing. The user will spend 2-3 hours per day in this app.
-
-7. After building, run the dev server and verify:
-   - Onboarding flow completes
-   - Words import correctly from words.txt format
-   - Flashcards show and rating buttons work (no API needed)
-   - Settings page saves API key
-   - Voice test button works in Settings
-   - Navigation works between all pages
-
-Build everything. Don't skip features. The spec is complete — implement all of it.
-```

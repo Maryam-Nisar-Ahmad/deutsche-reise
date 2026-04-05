@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { getIntervalPreview } from '../../lib/srs'
+import { getIntervalPreview, readRetentionTarget } from '../../lib/srs'
 
 const RATINGS = [
   { value: 1, label: 'Forgot', color: 'bg-red-600 hover:bg-red-500 border-red-700', textColor: 'text-white', key: '1' },
@@ -9,10 +9,11 @@ const RATINGS = [
 ]
 
 export default function RatingButtons({ card, onRate }) {
+  const retentionTarget = readRetentionTarget()
   return (
     <div className="grid grid-cols-4 gap-2 w-full">
       {RATINGS.map((r, i) => {
-        const preview = getIntervalPreview(card, r.value)
+        const preview = getIntervalPreview(card, r.value, { retentionTarget })
         return (
           <motion.button
             key={r.value}

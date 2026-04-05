@@ -1,6 +1,7 @@
 import { openDB } from 'idb'
-import { updateCard, getNextReviewTimestamp } from './srs.js'
-import { getFrequencyTier, normalizeGerman } from './wordParser.js'
+import { updateCard, getNextReviewTimestamp, readRetentionTarget } from './srs.js'
+import { getFrequencyTier, normalizeGerman, germanLikenessScore, orientGermanEnglishPair } from './wordParser.js'
+import { extractNormalizedKeysFromText, splitIntoSentences } from './storyMining.js'
 
 const DB_NAME = 'deutsche-reise-db'
 const DB_VERSION = 1
@@ -112,6 +113,8 @@ export async function importWords(wordsArray, meta = {}) {
         example: null,
         variants,
         frequencyTier: tier,
+        encounterCount: 0,
+        storyClozes: [],
       }
       const wordId = await wordStore.add(wordData)
 
@@ -172,6 +175,8 @@ export async function addWord(german, translation) {
     example: null,
     variants: [],
     frequencyTier: getFrequencyTier(german.trim()),
+    encounterCount: 0,
+    storyClozes: [],
   })
 
   await cardStore.add({
@@ -311,6 +316,37 @@ export async function updateWord(id, updates) {
   await safePut(db, 'words', { ...word, ...updates }, 'updateWord')
 }
 
+/**
+ * Fix entries where English was stored as `german` (common with Duolingo EN-first exports).
+ * Swaps fields when the translation line is clearly more German than the german field.
+ */
+export async function fixSwappedGermanEnglishInDB() {
+  const words = await getAllWords()
+  const db = await getDB()
+  let fixed = 0
+  for (const w of words) {
+    const g = (w.german || '').trim()
+    const t = (w.translation || '').trim()
+    if (!g || !t) continue
+    if (germanLikenessScore(t) <= germanLikenessScore(g) + 1) continue
+    const { german: ng, translation: nt } = orientGermanEnglishPair(g, t)
+    if (ng === g && nt === t) continue
+    await safePut(
+      db,
+      'words',
+      {
+        ...w,
+        german: ng,
+        translation: nt,
+        normalizedKey: normalizeGerman(ng),
+      },
+      'fixSwappedGermanEnglish'
+    )
+    fixed++
+  }
+  return { fixed, checked: words.length }
+}
+
 // ─── SRS Cards ────────────────────────────────────────────────────────────────
 
 export async function getDueCards(limit = 20) {
@@ -348,8 +384,95 @@ export async function updateCardAfterReview(wordId, rating) {
     stability: card.stability || 1,
     difficulty: card.difficulty || 5,
   }
-  const updated = updateCard(normalized, rating)
+  const updated = updateCard(normalized, rating, { retentionTarget: readRetentionTarget() })
   await safePut(db, 'srs_cards', updated, 'updateCardAfterReview')
+}
+
+/**
+ * Count one contextual encounter per vocabulary word in this chapter (once per chapter per story).
+ */
+export async function recordStoryChapterEncounters(storyId, chapterIndex, chapterText) {
+  const story = await getStory(storyId)
+  if (!story) return { bumped: 0, skipped: true }
+  const counted = Array.isArray(story.encounterCountedChapters) ? story.encounterCountedChapters : []
+  if (counted.includes(chapterIndex)) return { bumped: 0, skipped: true }
+
+  const keys = extractNormalizedKeysFromText(chapterText)
+  const words = await getAllWords()
+  const byKey = new Map(words.map((w) => [w.normalizedKey, w]))
+  const db = await getDB()
+  let bumped = 0
+  for (const k of keys) {
+    const w = byKey.get(k)
+    if (!w) continue
+    const next = (w.encounterCount || 0) + 1
+    await safePut(db, 'words', { ...w, encounterCount: next }, 'recordEncounters')
+    byKey.set(k, { ...w, encounterCount: next })
+    bumped++
+  }
+  await updateStoryRecord(storyId, {
+    encounterCountedChapters: [...counted, chapterIndex],
+  })
+  return { bumped, skipped: false }
+}
+
+/**
+ * Sentence-mine cloze cards from chapter text (links to existing SRS words).
+ */
+export async function mineChapterClozes(storyId, chapterTitle, chapterText, maxPerChapter = 8) {
+  const words = await getAllWords()
+  const sentences = splitIntoSentences(chapterText)
+  const sortedWords = [...words].sort(
+    (a, b) => (b.german?.length || 0) - (a.german?.length || 0)
+  )
+  let added = 0
+  const seenBlank = new Set()
+  const db = await getDB()
+
+  outer: for (const sent of sentences) {
+    if (added >= maxPerChapter) break
+    for (const w of sortedWords) {
+      if (added >= maxPerChapter) break outer
+      const forms = [w.german, ...(w.variants || [])]
+        .map((f) => String(f || '').trim())
+        .filter((f) => f.length > 2)
+      let hit = null
+      for (const form of forms) {
+        const lower = sent.toLowerCase()
+        const fl = form.toLowerCase()
+        const idx = lower.indexOf(fl)
+        if (idx < 0) continue
+        const before = idx > 0 ? sent[idx - 1] : ' '
+        const after = idx + form.length < sent.length ? sent[idx + form.length] : ' '
+        const boundaryOk = !/^[a-zäöüß]$/i.test(before) && !/^[a-zäöüß]$/i.test(after)
+        if (!boundaryOk) continue
+        hit = { idx, len: form.length }
+        break
+      }
+      if (!hit) continue
+      const surface = sent.slice(hit.idx, hit.idx + hit.len)
+      const blanked = sent.slice(0, hit.idx) + '____' + sent.slice(hit.idx + hit.len)
+      if (seenBlank.has(blanked)) continue
+      seenBlank.add(blanked)
+      const clozeId = `cz_${storyId}_${added}_${Date.now()}`
+      const newCloze = {
+        id: clozeId,
+        sentence: blanked,
+        fullSentence: sent,
+        answer: w.german,
+        surface,
+        storyId,
+        chapterTitle: chapterTitle || '',
+      }
+      const existing = Array.isArray(w.storyClozes) ? w.storyClozes : []
+      if (existing.length >= 12) continue
+      if (existing.some((c) => c.sentence === blanked || c.fullSentence === sent)) continue
+      await safePut(db, 'words', { ...w, storyClozes: [...existing, newCloze] }, 'mineCloze')
+      Object.assign(w, { storyClozes: [...existing, newCloze] })
+      added++
+    }
+  }
+  return added
 }
 
 export async function getCardStats() {
@@ -433,6 +556,8 @@ const DEFAULT_DAILY_SESSION = {
   storiesRead: 0,
   grammarExercises: 0,
   shadowingMinutes: 0,
+  productionSubmissions: 0,
+  passiveMinutes: 0,
   xpEarned: 0,
   minutesStudied: 0,
   flashcardsMinutes: 0,
@@ -441,7 +566,7 @@ const DEFAULT_DAILY_SESSION = {
   storyShadowMinutes: 0,
   grammarMinutes: 0,
   vocabMinutes: 0,
-  passiveMinutes: 0,
+  speakMinutes: 0,
 }
 
 export async function getTodaySession() {
@@ -459,6 +584,7 @@ const TIMER_FIELD_BY_PAGE_KEY = {
   story_shadow: 'storyShadowMinutes',
   grammar: 'grammarMinutes',
   vocab: 'vocabMinutes',
+  speak: 'speakMinutes',
 }
 
 /** Add whole minutes to today's session for a study page (manual timer Stop & Save). */
@@ -477,7 +603,8 @@ export function sumStudyMinutesFromSession(session) {
     (session.storyListenMinutes || 0) +
     (session.storyShadowMinutes || 0) +
     (session.grammarMinutes || 0) +
-    (session.vocabMinutes || 0)
+    (session.vocabMinutes || 0) +
+    (session.speakMinutes || 0)
   )
 }
 

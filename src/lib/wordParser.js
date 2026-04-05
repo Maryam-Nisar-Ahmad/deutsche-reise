@@ -2,6 +2,37 @@ export function normalizeGerman(word) {
   return word.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
+/** Duolingo (EN→DE) exports often put English on line 1 and German on line 2 — detect and orient. */
+const DE_HINT_RE = /\b(der|die|das|und|ich|du|er|sie|es|wir|ihr|nicht|ein|eine|einen|einem|zum|zur|ist|sind|bin|bist|hat|haben|war|wurde|wenn|dass|auch|nur|noch|schon|immer|mit|auf|für|aus|bei|nach|von|zu|wie|was|wo|oder|aber|dann|hier|da|mir|dir|mich|dich|euch|uns|ihnen|ihm|ihr)\b/i
+
+export function germanLikenessScore(s) {
+  if (!s || typeof s !== 'string') return 0
+  const t = s.trim()
+  if (!t) return 0
+  let sc = 0
+  if (/[äöüßÄÖÜ]/.test(t)) sc += 10
+  const dm = t.match(DE_HINT_RE)
+  if (dm) sc += Math.min(6, dm.length * 2)
+  const low = t.toLowerCase()
+  if (/^(the|a|an)\s+\w/.test(low)) sc -= 5
+  if (/^(to |and |or |hour|month|year|week|day|time|baggage|departure|someone|popcorn)\b/.test(low)) sc -= 4
+  if (t.length > 2 && t.length < 22 && /^[a-z\s,'\-–]+$/i.test(t) && !/[äöüß]/.test(t)) sc -= 1
+  return sc
+}
+
+/** Pick which string is German vs English gloss for a pair of lines (or tab/dash columns). */
+export function orientGermanEnglishPair(lineA, lineB) {
+  const a = String(lineA || '').trim()
+  const b = String(lineB || '').trim()
+  if (!a && !b) return { german: '', translation: '' }
+  if (!b) return { german: a, translation: '' }
+  if (!a) return { german: b, translation: '' }
+  const sa = germanLikenessScore(a)
+  const sb = germanLikenessScore(b)
+  if (sb > sa) return { german: b, translation: a }
+  return { german: a, translation: b }
+}
+
 /** Strip umlauts for matching masculine ↔ feminine noun pairs (Arzt / Ärztin). */
 function umlautFold(str) {
   return normalizeGerman(str)
@@ -228,6 +259,7 @@ export function parseDuolingoFormat(rawText) {
   const blocks = rawText.split(/\n\s*\n/).map(b => b.trim()).filter(Boolean)
   for (const block of blocks) {
     const lines = block.split('\n').map(l => l.trim()).filter(Boolean)
+    // Standard Duolingo copy-paste: line 1 = German, line 2 = English, blank line between cards.
     if (lines.length >= 2) {
       const german = lines[0]
       const translation = lines[1]

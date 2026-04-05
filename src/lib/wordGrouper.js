@@ -1,13 +1,15 @@
 import { callDeepSeek } from './deepseek.js'
-import { normalizeGerman, prepareGroupedImportRules } from './wordParser.js'
+import { normalizeGerman, prepareGroupedImportRules, orientGermanEnglishPair } from './wordParser.js'
 
 const BATCH_SIZE = 40
 
 function aiGroupsToImportRows(groups) {
   return (groups || [])
     .map((g) => {
-      const lemma = (g.lemma || '').trim()
-      if (!lemma) return null
+      const lemmaRaw = (g.lemma || '').trim()
+      if (!lemmaRaw) return null
+      const glossRaw = (g.translation || '').trim() || 'Imported'
+      const { german: lemma, translation: gloss } = orientGermanEnglishPair(lemmaRaw, glossRaw)
       const nk = normalizeGerman(lemma)
       const vars = (g.variants || [])
         .map((v) => String(v).trim())
@@ -17,7 +19,7 @@ function aiGroupsToImportRows(groups) {
       const frequencyTier = tier >= 1 && tier <= 3 ? tier : 3
       return {
         german: lemma,
-        translation: (g.translation || '').trim() || 'Imported',
+        translation: gloss || 'Imported',
         normalizedKey: nk,
         variants: vars,
         frequencyTier,
@@ -111,12 +113,18 @@ ${wordLines}`
     console.error('[WordGrouper] Full error:', e)
     console.log('[WordGrouper] Raw response was:', response)
     return {
-      groups: words.map((w) => ({
-        lemma: w.german,
-        translation: w.translation || 'Imported',
-        variants: [],
-        frequencyTier: 3,
-      })),
+      groups: words.map((w) => {
+        const { german, translation } = orientGermanEnglishPair(
+          w.german,
+          (w.translation || '').trim() || 'Imported'
+        )
+        return {
+          lemma: german,
+          translation: translation || 'Imported',
+          variants: [],
+          frequencyTier: 3,
+        }
+      }),
       parseOk: false,
     }
   }

@@ -13,6 +13,10 @@ export function useSettings() {
   const [dailyXPGoal, setDailyXPGoalState] = useState(
     () => parseInt(localStorage.getItem('dr_daily_xp_goal') || '300')
   )
+  const [targetRetention, setTargetRetentionState] = useState(() => {
+    const t = parseFloat(localStorage.getItem('dr_target_retention') || '0.9')
+    return Number.isFinite(t) && t >= 0.8 && t <= 0.97 ? t : 0.9
+  })
 
   const setApiKey = (key) => {
     const trimmed = key.trim()
@@ -36,6 +40,12 @@ export function useSettings() {
     setDailyXPGoalState(n)
   }
 
+  const setTargetRetention = (t) => {
+    const v = Math.round(Number(t) * 100) / 100
+    localStorage.setItem('dr_target_retention', String(v))
+    setTargetRetentionState(v)
+  }
+
   return {
     apiKey,
     setApiKey,
@@ -45,5 +55,7 @@ export function useSettings() {
     setDarkMode,
     dailyXPGoal,
     setDailyXPGoal,
+    targetRetention,
+    setTargetRetention,
   }
 }

@@ -2,7 +2,7 @@ import { Outlet, NavLink, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Home, CreditCard, BookOpen, Dumbbell, Library, Bell, Zap
+  Home, CreditCard, BookOpen, Dumbbell, Library, Bell, Zap, Mic,
 } from 'lucide-react'
 import Sidebar from './Sidebar'
 import XPToastContainer from './shared/XPToast'
@@ -13,6 +13,7 @@ const PAGE_TITLES = {
   '/flashcards': 'Flashcards',
   '/story': 'Story Studio',
   '/grammar': 'Grammar Gym',
+  '/speak': 'Speak & Write',
   '/vocab': 'Vocab Vault',
   '/settings': 'Settings',
 }
@@ -84,6 +85,7 @@ export default function Layout() {
           { path: '/flashcards', icon: CreditCard,  label: 'Cards' },
           { path: '/story',     icon: BookOpen,    label: 'Story' },
           { path: '/grammar',   icon: Dumbbell,    label: 'Grammar' },
+          { path: '/speak',     icon: Mic,         label: 'Speak' },
           { path: '/vocab',     icon: Library,     label: 'Vocab' },
         ].map(({ path, icon: Icon, label }) => (
           <NavLink

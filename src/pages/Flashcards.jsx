@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowLeft, CheckCircle, RotateCcw, Brain, Zap, Timer, Star } from 'lucide-react'
@@ -28,8 +28,18 @@ export default function Flashcards() {
   })
   const [cardMode, setCardMode] = useState('de_to_en')
   const [loading, setLoading] = useState(true)
+  const clozeSessionSalt = useRef(Math.floor(Math.random() * 1e9))
 
   const newCardsPerDay = parseInt(localStorage.getItem('dr_new_cards_per_day') || '15')
+
+  const selectClozeForCard = useCallback((word, index) => {
+    const list = word?.storyClozes
+    if (!Array.isArray(list) || !list.length) return null
+    const preferCloze = ((Number(word.id) * 17 + index * 13 + clozeSessionSalt.current) % 10) < 6
+    if (!preferCloze) return null
+    const i = Math.abs((Number(word.id) * 31 + index + clozeSessionSalt.current) % list.length)
+    return list[i]
+  }, [])
 
   useEffect(() => {
     loadCards()
@@ -62,6 +72,8 @@ export default function Flashcards() {
       [cards[i], cards[j]] = [cards[j], cards[i]]
     }
     setAllCards(cards)
+    clozeSessionSalt.current = Math.floor(Math.random() * 1e9)
+    setCardMode('de_to_en')
     setCurrentIndex(0)
     setIsFlipped(false)
     setSessionStats({ reviewed: 0, correct: 0, xp: 0, startTime: Date.now(), streak: 0, maxStreak: 0 })
@@ -115,9 +127,12 @@ export default function Flashcards() {
 
     setCurrentIndex(next)
     setIsFlipped(false)
-    // Alternate card mode every 3 cards
-    if (next % 3 === 0) setCardMode(m => m === 'de_to_en' ? 'en_to_de' : 'de_to_en')
-  }, [allCards, currentIndex, sessionStats, newCards])
+    const nextCard = allCards[next]
+    const nextCloze = nextCard ? selectClozeForCard(nextCard.word, next) : null
+    if (!nextCloze && next % 3 === 0) {
+      setCardMode(m => m === 'de_to_en' ? 'en_to_de' : 'de_to_en')
+    }
+  }, [allCards, currentIndex, sessionStats, newCards, selectClozeForCard])
 
   useEffect(() => {
     const handler = (e) => {
@@ -217,7 +232,11 @@ export default function Flashcards() {
             </Button>
           )}
 
-          <p className="text-xs text-slate-600">Tip: Use keyboard 1/2/3/4 to rate, Space to flip</p>
+          <p className="text-xs text-slate-600 mb-2">Tip: Use keyboard 1/2/3/4 to rate, Space to flip</p>
+          <p className="text-[11px] text-slate-500 leading-relaxed text-left max-w-md mx-auto">
+            <strong className="text-slate-400">Why few “reviews”?</strong> Spaced repetition spreads cards out after you rate them
+            (e.g. Good → several days). New words and due reviews are mixed; only cards past their due date appear in Reviews.
+          </p>
         </div>
       </div>
       </>
@@ -291,6 +310,7 @@ export default function Flashcards() {
 
   // REVIEW SCREEN
   const card = allCards[currentIndex]
+  const activeCloze = selectClozeForCard(card.word, currentIndex)
   const progress = currentIndex / allCards.length
   const progressPct = Math.round(progress * 100)
 
@@ -341,6 +361,7 @@ export default function Flashcards() {
           <FlashCard
             card={card}
             mode={cardMode}
+            cloze={activeCloze}
             isFlipped={isFlipped}
             onFlip={() => setIsFlipped(true)}
           />

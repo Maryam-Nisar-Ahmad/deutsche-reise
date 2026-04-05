@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Volume2, Clock } from 'lucide-react'
 import { germanVoice } from '../../lib/voice'
 import clsx from 'clsx'
 
-export default function FlashCard({ card, mode = 'de_to_en', isFlipped, onFlip }) {
+export default function FlashCard({ card, mode = 'de_to_en', isFlipped, onFlip, cloze = null }) {
   const { word } = card
+  const showCloze = Boolean(cloze?.sentence)
 
   // Format last reviewed
   const lastReviewedText = card.lastReview
@@ -30,31 +30,55 @@ export default function FlashCard({ card, mode = 'de_to_en', isFlipped, onFlip }
         <div className="flashcard-face card flex flex-col items-center justify-center p-8 text-center" style={{ height: 320 }}>
           <div className="flex items-center gap-2 mb-2">
             <span className="text-xs text-slate-500 uppercase tracking-wider">
-              {mode === 'de_to_en' ? 'German' : 'English'}
+              {showCloze ? 'Cloze (from your story)' : mode === 'de_to_en' ? 'German' : 'English'}
             </span>
           </div>
 
-          <div className="flex items-center gap-3 mb-4">
-            {mode === 'de_to_en' && word.gender && (
-              <span className={clsx('text-xl font-medium', genderColor[word.gender] || 'text-slate-400')}>
-                {word.gender}
-              </span>
-            )}
-            <h2 className="text-4xl font-bold text-white font-mono">
-              {mode === 'de_to_en' ? word.german : word.translation}
-            </h2>
-            {mode === 'de_to_en' && (
-              <button
-                onClick={(e) => { e.stopPropagation(); germanVoice.speakWord(word.german) }}
-                className="text-slate-500 hover:text-brand-400 transition-colors"
-              >
-                <Volume2 size={22} />
-              </button>
-            )}
-          </div>
+          {showCloze ? (
+            <div className="w-full max-w-md px-1">
+              <p className="text-lg sm:text-xl text-white leading-relaxed font-medium text-left">
+                {cloze.sentence}
+              </p>
+              <p className="text-xs text-slate-500 mt-4 text-left">Fill the blank, then show answer</p>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-3 mb-4 flex-wrap justify-center">
+                {mode === 'de_to_en' && word.gender && (
+                  <span className={clsx('text-xl font-medium', genderColor[word.gender] || 'text-slate-400')}>
+                    {word.gender}
+                  </span>
+                )}
+                <h2 className="text-4xl font-bold text-white font-mono">
+                  {mode === 'de_to_en' ? word.german : word.translation}
+                </h2>
+                {mode === 'de_to_en' && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); germanVoice.speakWord(word.german) }}
+                    className="text-slate-500 hover:text-brand-400 transition-colors"
+                    type="button"
+                    aria-label="Play German"
+                  >
+                    <Volume2 size={22} />
+                  </button>
+                )}
+                {mode === 'en_to_de' && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); germanVoice.speakWord(word.german) }}
+                    className="flex items-center gap-1.5 text-xs text-brand-400 hover:text-brand-300 border border-brand-500/40 rounded-lg px-2 py-1"
+                    aria-label="Hear German answer"
+                  >
+                    <Volume2 size={14} />
+                    Hear German
+                  </button>
+                )}
+              </div>
 
-          {mode === 'en_to_de' && (
-            <p className="text-slate-500 text-sm">What's the German word?</p>
+              {mode === 'en_to_de' && (
+                <p className="text-slate-500 text-sm">What is the German for this English cue?</p>
+              )}
+            </>
           )}
 
           <div className="mt-auto flex items-center gap-1 text-xs text-slate-600">
@@ -72,8 +96,14 @@ export default function FlashCard({ card, mode = 'de_to_en', isFlipped, onFlip }
 
         {/* Back */}
         <div className="flashcard-face flashcard-back card flex flex-col items-center justify-center p-8 text-center bg-surface-900" style={{ height: 320 }}>
-          <div className="mb-3">
-            <div className="flex items-center justify-center gap-2 mb-1">
+          <div className="mb-3 w-full max-w-lg">
+            {showCloze && cloze.fullSentence && (
+              <p className="text-sm text-slate-400 mb-3 text-left leading-relaxed italic">
+                {cloze.fullSentence}
+              </p>
+            )}
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">German</div>
+            <div className="flex items-center justify-center gap-2 mb-2">
               {word.gender && (
                 <span className={clsx('text-xl font-medium', genderColor[word.gender] || 'text-slate-400')}>
                   {word.gender}
@@ -81,12 +111,15 @@ export default function FlashCard({ card, mode = 'de_to_en', isFlipped, onFlip }
               )}
               <h2 className="text-3xl font-bold text-white font-mono">{word.german}</h2>
               <button
+                type="button"
                 onClick={(e) => { e.stopPropagation(); germanVoice.speakWord(word.german) }}
                 className="text-slate-500 hover:text-brand-400 transition-colors"
+                aria-label="Play German"
               >
                 <Volume2 size={20} />
               </button>
             </div>
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">English</div>
             <div className="text-xl text-brand-300 font-medium">{word.translation}</div>
             {Array.isArray(word.variants) && word.variants.length > 0 && (
               <div className="mt-3 text-left w-full max-w-sm mx-auto rounded-xl bg-surface-800/80 border border-surface-700 px-3 py-2">

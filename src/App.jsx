@@ -7,6 +7,7 @@ import StoryStudio from './pages/StoryStudio'
 import GrammarGym from './pages/GrammarGym'
 import VocabVault from './pages/VocabVault'
 import Settings from './pages/Settings'
+import SpeakLab from './pages/SpeakLab'
 import Onboarding from './pages/Onboarding'
 
 export default function App() {
@@ -63,6 +64,7 @@ export default function App() {
           <Route path="/story/:id" element={<StoryStudio />} />
           <Route path="/grammar" element={<GrammarGym />} />
           <Route path="/grammar/:focus" element={<GrammarGym />} />
+          <Route path="/speak" element={<SpeakLab />} />
           <Route path="/vocab" element={<VocabVault />} />
           <Route path="/settings" element={<Settings />} />
         </Route>

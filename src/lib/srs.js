@@ -6,21 +6,28 @@ function retrievability(stability, daysSinceReview) {
   return Math.pow(1 + (FACTOR * daysSinceReview) / stability, DECAY)
 }
 
-function newStability(stability, r, rating) {
+function newStability(stability, r, rating, difficulty) {
   // rating: 1=Again, 2=Hard, 3=Good, 4=Easy
   const hardPenalty = rating === 2 ? 0.8 : 1
   const easyBonus = rating === 4 ? 1.3 : 1
+  const d = typeof difficulty === 'number' ? difficulty : 5
+  const difficultyScale = 1 + (5 - Math.min(10, Math.max(1, d))) * 0.04
   return stability * (
     Math.exp(0.4) * (11 - r * 10) *
-    Math.pow(r, -0.7) * hardPenalty * easyBonus
+    Math.pow(r, -0.7) * hardPenalty * easyBonus * difficultyScale
   )
 }
 
-export function updateCard(card, rating) {
+/**
+ * @param {{ retentionTarget?: number }} [options] retentionTarget 0.85–0.93 (default 0.9). Lower → shorter intervals.
+ */
+export function updateCard(card, rating, options = {}) {
   const now = Date.now()
   const currentStability = card.stability || 1
   const currentDifficulty = card.difficulty || 5
   const daysSince = card.lastReview ? (now - card.lastReview) / 86400000 : 0
+  const target = typeof options.retentionTarget === 'number' ? options.retentionTarget : 0.9
+  const retentionMultiplier = Math.max(0.65, Math.min(1.2, 0.9 / target))
 
   if (rating === 1) {
     return {
@@ -38,15 +45,15 @@ export function updateCard(card, rating) {
   }
 
   const r = card.lastReview ? retrievability(currentStability, daysSince) : 0.9
-  const nextStability = card.stability
-    ? newStability(currentStability, r, rating)
+  const rawNext = card.stability
+    ? newStability(currentStability, r, rating, currentDifficulty)
     : [null, 1, 2, 4, 8][rating]
 
-  const interval = Math.max(1, Math.round(nextStability))
+  const interval = Math.max(1, Math.round(rawNext * retentionMultiplier))
 
   return {
     ...card,
-    stability: nextStability,
+    stability: rawNext,
     difficulty: Math.max(1, Math.min(10, currentDifficulty + (3 - rating) * 0.1)),
     state: 'review',
     interval,
@@ -69,14 +76,23 @@ export function isDue(card) {
   return card.nextReview <= Date.now()
 }
 
+/** Read learner retention target (0.8–0.97). Used for interval scaling. */
+export function readRetentionTarget() {
+  const t = parseFloat(
+    typeof localStorage !== 'undefined' ? localStorage.getItem('dr_target_retention') || '0.9' : '0.9'
+  )
+  if (Number.isFinite(t) && t >= 0.8 && t <= 0.97) return t
+  return 0.9
+}
+
 export function estimateRetention(card) {
   if (!card.lastReview) return 0
   const daysSinceReview = (Date.now() - card.lastReview) / (1000 * 60 * 60 * 24)
   return Math.exp(-daysSinceReview / (card.interval * 0.5)) * 100
 }
 
-export function getIntervalPreview(card, rating) {
-  const result = updateCard(card, rating)
+export function getIntervalPreview(card, rating, options = {}) {
+  const result = updateCard(card, rating, options)
   if (rating === 1) return 'Again (1 day)'
   if (result.interval === 1) return '1 day'
   if (result.interval < 30) return `${result.interval} days`

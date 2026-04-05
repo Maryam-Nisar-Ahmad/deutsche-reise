@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import {
   Home, CreditCard, BookOpen, Dumbbell, Library, Settings,
-  Flame, Zap, ChevronLeft, ChevronRight
+  Flame, Zap, ChevronLeft, ChevronRight, Mic,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { getCardStats, getTotalXP } from '../lib/db'
@@ -13,6 +13,7 @@ const navItems = [
   { path: '/flashcards', icon: CreditCard, label: 'Flashcards', badge: true },
   { path: '/story',     icon: BookOpen,  label: 'Story Studio' },
   { path: '/grammar',   icon: Dumbbell,  label: 'Grammar Gym' },
+  { path: '/speak',     icon: Mic,       label: 'Speak & Write' },
   { path: '/vocab',     icon: Library,   label: 'Vocab Vault' },
 ]
 
@@ -72,7 +73,7 @@ export default function Sidebar({ wordCount, masteredCount = 0, onWidthChange })
           <div className="text-xs text-slate-500 mt-1">
             <span className="text-slate-400">{masteredCount}</span> mastered
             <span className="text-slate-600 mx-1">·</span>
-            <span>{wordCount}</span> exposure
+            <span>{wordCount}</span> words
           </div>
         </div>
       )}

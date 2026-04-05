@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { CreditCard, BookOpen, Dumbbell, Mic, Zap, CheckCircle2, Circle } from 'lucide-react'
+import { CreditCard, BookOpen, Dumbbell, Mic, Zap, CheckCircle2, Circle, MessageSquare } from 'lucide-react'
 import clsx from 'clsx'
 
 const TASKS = [
@@ -32,6 +32,15 @@ const TASKS = [
     bg: 'bg-green-500/10',
   },
   {
+    id: 'speak',
+    icon: MessageSquare,
+    label: 'Speak & Write',
+    path: '/speak',
+    xp: 35,
+    color: 'text-cyan-400',
+    bg: 'bg-cyan-500/10',
+  },
+  {
     id: 'shadow',
     icon: Mic,
     label: 'Shadowing',
@@ -51,6 +60,7 @@ export default function DailyPlan({ session, dueCount, dailyXPGoal = 300 }) {
   if ((session?.flashcardsReviewed || 0) >= 10) completedTasks.add('flashcards')
   if ((session?.storiesRead || 0) >= 1) completedTasks.add('story')
   if ((session?.grammarExercises || 0) >= 1) completedTasks.add('grammar')
+  if ((session?.productionSubmissions || 0) >= 1) completedTasks.add('speak')
   if ((session?.shadowingMinutes || 0) >= 5) completedTasks.add('shadow')
 
   return (

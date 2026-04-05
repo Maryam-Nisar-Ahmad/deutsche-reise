@@ -2,9 +2,15 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Search, Upload, Plus, Volume2, Trash2, Download, Copy,
-  Filter, BookMarked, AlertCircle
+  Filter, BookMarked, AlertCircle, Loader2, Sparkles, ChevronRight,
 } from 'lucide-react'
-import { getAllWords, getWordCount, importWords, addWord, deleteWord, getCardForWord } from '../lib/db'
+import {
+  getAllWords, getWordCount, importWords, addWord, deleteWord, getCardForWord,
+  fixSwappedGermanEnglishInDB, getMasteredWordCount,
+} from '../lib/db'
+import { auditVocabularyFrequency, generateExampleSentenceForWord } from '../lib/deepseek'
+import { getLevel } from '../lib/levelCalc'
+import { showAppToast } from '../components/shared/XPToast'
 import { parseDuolingoFormat, parseManualEntry, prepareGroupedImportRules } from '../lib/wordParser'
 import { prepareGroupedImport } from '../lib/wordGrouper'
 import { germanVoice } from '../lib/voice'
@@ -53,6 +59,13 @@ export default function VocabVault() {
   const [manualTranslation, setManualTranslation] = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [showImportArea, setShowImportArea] = useState(false)
+  const [fixSwapBusy, setFixSwapBusy] = useState(false)
+  const [auditBusy, setAuditBusy] = useState(false)
+  const [auditOffset, setAuditOffset] = useState(0)
+  const [auditResults, setAuditResults] = useState(null)
+  const [practiceWord, setPracticeWord] = useState(null)
+  const [practiceSentence, setPracticeSentence] = useState('')
+  const [practiceBusy, setPracticeBusy] = useState(false)
   const fileRef = useRef(null)
 
   const loadWords = async () => {
@@ -100,12 +113,79 @@ export default function VocabVault() {
   const stats = useMemo(() => {
     const all = Object.values(cards)
     return {
-      total: words.length,
       mastered: all.filter(c => c.state === 'review').length,
       learning: all.filter(c => c.state === 'learning' || c.state === 'relearning').length,
       newCards: all.filter(c => c.state === 'new').length,
     }
   }, [words, cards])
+
+  const handleFixEnDeSwap = async () => {
+    setFixSwapBusy(true)
+    try {
+      const { fixed } = await fixSwappedGermanEnglishInDB()
+      await loadWords()
+      showAppToast(
+        fixed > 0
+          ? `Fixed ${fixed} entries where English was stored as German. Re-open Flashcards.`
+          : 'No obvious EN/DE swaps found (or already fixed).'
+      )
+    } catch (e) {
+      showAppToast(e.message || 'Fix failed')
+    }
+    setFixSwapBusy(false)
+  }
+
+  const handleFrequencyAudit = async () => {
+    const apiKey = localStorage.getItem('dr_api_key')
+    if (!apiKey?.trim()) {
+      showAppToast('Add DeepSeek API key in Settings to run frequency audit.')
+      return
+    }
+    if (!words.length) return
+    setAuditBusy(true)
+    setAuditResults(null)
+    try {
+      const start = Math.min(auditOffset, Math.max(0, words.length - 1))
+      const slice = words.slice(start, start + 40)
+      const results = await auditVocabularyFrequency(slice)
+      setAuditResults({ start, slice, results })
+      setAuditOffset(start + 40 >= words.length ? 0 : start + 40)
+    } catch (e) {
+      showAppToast(e.message || 'Audit failed')
+    }
+    setAuditBusy(false)
+  }
+
+  const pickRandomPracticeWord = () => {
+    if (!words.length) return
+    const w = words[Math.floor(Math.random() * words.length)]
+    setPracticeWord(w)
+    setPracticeSentence('')
+  }
+
+  const loadPracticeSentence = async () => {
+    if (!practiceWord) return
+    const apiKey = localStorage.getItem('dr_api_key')
+    if (!apiKey?.trim()) {
+      showAppToast('Add API key in Settings for AI example sentences.')
+      return
+    }
+    setPracticeBusy(true)
+    try {
+      const mastered = await getMasteredWordCount()
+      const lv = getLevel(mastered).level
+      const s = await generateExampleSentenceForWord(
+        practiceWord.german,
+        practiceWord.translation,
+        lv
+      )
+      setPracticeSentence(s)
+      germanVoice.speakWord(s)
+    } catch (e) {
+      showAppToast(e.message || 'Could not generate sentence')
+    }
+    setPracticeBusy(false)
+  }
 
   const handleImport = async () => {
     if (!importText.trim()) return
@@ -362,9 +442,86 @@ export default function VocabVault() {
         </p>
       </div>
 
+      <div className="card p-5 space-y-4">
+        <h3 className="text-sm font-semibold text-white">Vocab tools</h3>
+        <p className="text-xs text-slate-500 leading-relaxed">
+          Standard Duolingo list format: <strong className="text-slate-400">German line, English line, blank line</strong>
+          — imports use that order. If you ever pasted a list with columns reversed, or old bad data shows English in the German column, use fix once.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={fixSwapBusy || words.length === 0}
+            onClick={handleFixEnDeSwap}
+            icon={fixSwapBusy ? <Loader2 size={14} className="animate-spin" /> : undefined}
+          >
+            {fixSwapBusy ? 'Fixing…' : 'Fix EN/DE swap in database'}
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={auditBusy || words.length === 0}
+            onClick={handleFrequencyAudit}
+            icon={auditBusy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+          >
+            {auditBusy ? 'Auditing…' : `AI frequency audit (next 40)`}
+          </Button>
+        </div>
+        {auditResults?.results?.length > 0 && (
+          <div className="rounded-xl border border-surface-700 bg-surface-900/50 p-3 max-h-48 overflow-y-auto text-xs">
+            <p className="text-slate-500 mb-2">Batch starting at word #{auditResults.start + 1} — bands: core / useful / niche / noise</p>
+            <ul className="space-y-1 text-slate-400">
+              {auditResults.results.map((r) => {
+                const w = auditResults.slice[r.index - 1]
+                if (!w) return null
+                return (
+                  <li key={r.index}>
+                    <span className="text-white">{w.german}</span>
+                    {' '}
+                    <span className="text-brand-400">({r.band})</span>
+                    {' — '}
+                    {r.note}
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        )}
+
+        <div className="border-t border-surface-800 pt-4">
+          <p className="text-xs text-slate-500 mb-2">Quick practice: random word + one AI example sentence</p>
+          <div className="flex flex-wrap gap-2 mb-3">
+            <Button type="button" size="sm" variant="secondary" onClick={pickRandomPracticeWord} disabled={!words.length}>
+              Random word
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={loadPracticeSentence}
+              disabled={!practiceWord || practiceBusy}
+              icon={practiceBusy ? <Loader2 size={14} className="animate-spin" /> : <ChevronRight size={14} />}
+            >
+              {practiceBusy ? '…' : 'Make example sentence'}
+            </Button>
+          </div>
+          {practiceWord && (
+            <div className="rounded-xl bg-surface-800/60 border border-surface-700 p-3 text-sm">
+              <p className="text-white font-medium">{practiceWord.german}</p>
+              <p className="text-slate-500 text-xs">{practiceWord.translation}</p>
+              {practiceSentence && (
+                <p className="text-slate-300 mt-2 italic">{practiceSentence}</p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="grid grid-cols-4 gap-3">
         {[
-          { label: 'Total', value: stats.total, color: 'text-white' },
+          { label: 'Total', value: words.length, color: 'text-white' },
           { label: 'Mastered', value: stats.mastered, color: 'text-green-400' },
           { label: 'Learning', value: stats.learning, color: 'text-yellow-400' },
           { label: 'New', value: stats.newCards, color: 'text-blue-400' },
@@ -481,6 +638,16 @@ export default function VocabVault() {
                         <span className="text-slate-600"> · +{word.variants.length} forms</span>
                       )}
                     </div>
+                  </div>
+
+                  {/* Encounters & cloze (research: multiple exposures) */}
+                  <div className="hidden sm:flex flex-col items-end text-[10px] text-slate-500 shrink-0 w-14">
+                    <span title="Times seen in story chapters">{word.encounterCount || 0}×</span>
+                    {(word.storyClozes?.length || 0) > 0 && (
+                      <span className="text-brand-400/90" title="Cloze cards from stories">
+                        {word.storyClozes.length} cloze
+                      </span>
+                    )}
                   </div>
 
                   {/* SRS bar */}

@@ -25,9 +25,9 @@ function getCurrentPhase() {
   const now = new Date()
   const daysElapsed = Math.max(0, Math.floor((now - start) / 86400000))
   const month = Math.floor(daysElapsed / 30) + 1
-  if (month <= 2) return { phase: 1, name: 'Foundation', daysRemaining: Math.max(0, 60 - daysElapsed), color: 'from-blue-500/20 to-cyan-500/10', desc: 'Focus on Anki vocabulary (15-20 new cards/day) and basic grammar. Keep stories simple.', today: 'Today: Review Anki first, then read one story chapter, then 20 min Grammar Gym' }
-  if (month <= 4) return { phase: 2, name: 'Input Immersion', daysRemaining: Math.max(0, 120 - daysElapsed), color: 'from-purple-500/20 to-indigo-500/10', desc: 'Reduce new cards to 10/day. Prioritize Story Studio and listening. Start tutor sessions.', today: 'Today: Reviews first, then Story Studio listening + one tutor exchange' }
-  return { phase: 3, name: 'Output & Fluency', daysRemaining: Math.max(0, 210 - daysElapsed), color: 'from-green-500/20 to-emerald-500/10', desc: 'Heavy immersion + speaking practice. Grammar Gym with interleaved mode. Exam prep.', today: 'Today: Reviews, interleaved grammar, and a speaking-focused tutor session' }
+  if (month <= 2) return { phase: 1, name: 'Foundation', daysRemaining: Math.max(0, 60 - daysElapsed), color: 'from-blue-500/20 to-cyan-500/10', desc: 'Focus on vocabulary (15–20 new cards/day), basic grammar, and short story chapters. Mine cloze cards from stories.', today: 'Today: Flashcards → Story (mine cloze) → Grammar Gym → Speak & Write (short)' }
+  if (month <= 4) return { phase: 2, name: 'Input Immersion', daysRemaining: Math.max(0, 120 - daysElapsed), color: 'from-purple-500/20 to-indigo-500/10', desc: 'Reduce new cards toward 10/day. Prioritize Story Studio, listening, and narrow reading. Keep daily written output.', today: 'Today: Reviews → Story listening + cloze mining → Speak & Write' }
+  return { phase: 3, name: 'Output & Fluency', daysRemaining: Math.max(0, 210 - daysElapsed), color: 'from-green-500/20 to-emerald-500/10', desc: 'Heavy immersion + production. Interleaved grammar, longer Speak & Write, exam-style tasks.', today: 'Today: Reviews, interleaved grammar, Speak & Write, shadowing' }
 }
 
 export default function Dashboard() {
@@ -67,8 +67,8 @@ export default function Dashboard() {
         setPhaseSuggestion('Phase 1 cap applied: new cards/day set to 20.')
       } else if (p.phase === 2 && newCards >= 20) {
         setPhaseSuggestion('Suggestion: reduce new cards/day to 10 for better immersion balance.')
-      } else if (p.phase === 3 && grammarWeekCount < 3) {
-        setPhaseSuggestion('Start speaking: aim for at least 3 Grammar Gym/tutor speaking sessions this week.')
+      } else if (p.phase === 3 && grammarWeekCount < 2) {
+        setPhaseSuggestion('B2 push: use Speak & Write most days plus Grammar Gym or shadowing.')
       } else {
         setPhaseSuggestion('')
       }
