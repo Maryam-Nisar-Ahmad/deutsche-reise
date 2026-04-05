@@ -1,6 +1,8 @@
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { CreditCard, BookOpen, Dumbbell, Mic, Zap, CheckCircle2, Circle, MessageSquare } from 'lucide-react'
+import {
+  CreditCard, BookOpen, Dumbbell, Mic, Zap, CheckCircle2, Circle, MessageSquare, ListOrdered,
+} from 'lucide-react'
 import clsx from 'clsx'
 
 const TASKS = [
@@ -12,6 +14,15 @@ const TASKS = [
     xp: 50,
     color: 'text-blue-400',
     bg: 'bg-blue-500/10',
+  },
+  {
+    id: 'frequency',
+    icon: ListOrdered,
+    label: 'Frequency Lab',
+    path: '/frequency',
+    xp: 40,
+    color: 'text-amber-400',
+    bg: 'bg-amber-500/10',
   },
   {
     id: 'story',
@@ -51,13 +62,14 @@ const TASKS = [
   },
 ]
 
-export default function DailyPlan({ session, dueCount, dailyXPGoal = 300 }) {
+export default function DailyPlan({ session, dueCount, dailyXPGoal = 300, frequencyWordsGoal = 25 }) {
   const navigate = useNavigate()
   const todayXP = session?.xpEarned || 0
   const xpProgress = Math.min(100, (todayXP / dailyXPGoal) * 100)
 
   const completedTasks = new Set()
   if ((session?.flashcardsReviewed || 0) >= 10) completedTasks.add('flashcards')
+  if ((session?.frequencyWordsLearned || 0) >= frequencyWordsGoal) completedTasks.add('frequency')
   if ((session?.storiesRead || 0) >= 1) completedTasks.add('story')
   if ((session?.grammarExercises || 0) >= 1) completedTasks.add('grammar')
   if ((session?.productionSubmissions || 0) >= 1) completedTasks.add('speak')
@@ -117,6 +129,11 @@ export default function DailyPlan({ session, dueCount, dailyXPGoal = 300 }) {
                 </div>
                 {task.id === 'flashcards' && dueCount > 0 && !done && (
                   <div className="text-xs text-slate-500">{dueCount} cards due</div>
+                )}
+                {task.id === 'frequency' && !done && (
+                  <div className="text-xs text-slate-500">
+                    {session?.frequencyWordsLearned || 0} / {frequencyWordsGoal} words added
+                  </div>
                 )}
               </div>
 

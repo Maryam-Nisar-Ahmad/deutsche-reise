@@ -4,6 +4,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowLeft, CheckCircle, RotateCcw, Brain, Zap, Timer, Star } from 'lucide-react'
 import { getDueCards, getNewCards, updateCardAfterReview, updateTodaySession, getTodaySession, addXP, getCardStats } from '../lib/db'
 import { useStreak } from '../hooks/useStreak'
+import { useSettings } from '../hooks/useSettings'
+import { estimateWeeklyReviewLoad } from '../lib/reviewLoad'
 import FlashCard from '../components/flashcards/FlashCard'
 import RatingButtons from '../components/flashcards/RatingButtons'
 import Button from '../components/shared/Button'
@@ -15,6 +17,7 @@ const STAGE = { PRE: 'pre', REVIEW: 'review', POST: 'post' }
 export default function Flashcards() {
   const navigate = useNavigate()
   const { incrementStreak } = useStreak()
+  const { newCardsPerDay: settingsNewPerDay } = useSettings()
   const [stage, setStage] = useState(STAGE.PRE)
   const [dueCards, setDueCards] = useState([])
   const [newCards, setNewCards] = useState([])
@@ -30,7 +33,7 @@ export default function Flashcards() {
   const [loading, setLoading] = useState(true)
   const clozeSessionSalt = useRef(Math.floor(Math.random() * 1e9))
 
-  const newCardsPerDay = parseInt(localStorage.getItem('dr_new_cards_per_day') || '15')
+  const newCardsPerDay = settingsNewPerDay
 
   const selectClozeForCard = useCallback((word, index) => {
     const list = word?.storyClozes
@@ -163,6 +166,7 @@ export default function Flashcards() {
   if (stage === STAGE.PRE) {
     const totalCards = (sessionMode !== 'only_new' ? dueCards.length : 0) + (sessionMode !== 'only_reviews' ? newCards.length : 0)
     const estimatedMin = Math.ceil(totalCards * 8 / 60)
+    const reviewLoad = estimateWeeklyReviewLoad({ dueCount: stats.due, newCardsPerDay })
 
     return (
       <>
@@ -185,6 +189,11 @@ export default function Flashcards() {
               <div className="text-xs text-slate-500 mt-0.5">New today</div>
             </div>
           </div>
+
+          <p className="text-[11px] text-slate-500 text-left px-1">
+            {reviewLoad.summary} Too many cards? Lower new cards/day in Settings. More detail:{' '}
+            <code className="text-slate-400">public/FIRST_WEEK_GUIDE.txt</code>
+          </p>
 
           {/* Mode selector */}
           <div>
@@ -233,10 +242,13 @@ export default function Flashcards() {
           )}
 
           <p className="text-xs text-slate-600 mb-2">Tip: Use keyboard 1/2/3/4 to rate, Space to flip</p>
-          <p className="text-[11px] text-slate-500 leading-relaxed text-left max-w-md mx-auto">
-            <strong className="text-slate-400">Why few “reviews”?</strong> Spaced repetition spreads cards out after you rate them
-            (e.g. Good → several days). New words and due reviews are mixed; only cards past their due date appear in Reviews.
-          </p>
+          <button
+            type="button"
+            onClick={() => navigate('/placement')}
+            className="text-xs text-brand-400 hover:underline w-full text-center"
+          >
+            SRS Placement — mark words you already know
+          </button>
         </div>
       </div>
       </>

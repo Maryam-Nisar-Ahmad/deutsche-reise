@@ -3,6 +3,9 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import './index.css'
 import { initDB } from './lib/db'
+import { applyThemeFromStorage } from './lib/theme'
+
+applyThemeFromStorage()
 
 // Remove legacy auto-timer keys (timers are manual-only now)
 try {

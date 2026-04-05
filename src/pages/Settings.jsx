@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
   Key, Eye, EyeOff, Volume2, Sliders, Calendar,
@@ -9,7 +10,10 @@ import { useSettings } from '../hooks/useSettings'
 import { useVoice } from '../hooks/useVoice'
 import { testConnection } from '../lib/deepseek'
 import { germanVoice } from '../lib/voice'
-import { getAllWords, getWordCount, initDB, importWords, applyAIFamilyMerge } from '../lib/db.js'
+import {
+  getAllWords, getWordCount, initDB, importWords, applyAIFamilyMerge,
+  exportFullBackup, importFullBackup,
+} from '../lib/db.js'
 import { groupWordFamiliesWithAI } from '../lib/wordGrouper.js'
 import Button from '../components/shared/Button'
 import Modal from '../components/shared/Modal'
@@ -36,6 +40,7 @@ export default function Settings() {
   const {
     apiKey, setApiKey, newCardsPerDay, setNewCardsPerDay, darkMode, setDarkMode,
     dailyXPGoal, setDailyXPGoal, targetRetention, setTargetRetention,
+    frequencyWordsPerDay, setFrequencyWordsPerDay,
   } = useSettings()
   const { voices, selectedVoiceURI, changeVoice, rate, changeRate } = useVoice()
 
@@ -54,6 +59,8 @@ export default function Settings() {
   const [regroupBusy, setRegroupBusy] = useState(false)
   const [regroupProgress, setRegroupProgress] = useState('')
   const [regroupResult, setRegroupResult] = useState(null)
+  const [fullRestoreConfirm, setFullRestoreConfirm] = useState(false)
+  const [pendingFullBackupFile, setPendingFullBackupFile] = useState(null)
 
   useEffect(() => {
     const checkDb = async () => {
@@ -103,7 +110,7 @@ export default function Settings() {
     germanVoice.speakWord('Guten Tag! Ich heiße Deutsche Reise. Schön, mit dir Deutsch zu lernen.')
   }
 
-  const handleExportData = async () => {
+  const handleExportWordsOnly = async () => {
     const words = await getAllWords()
     const data = {
       version: 1,
@@ -111,6 +118,7 @@ export default function Settings() {
       words,
       settings: {
         newCardsPerDay,
+        frequencyWordsPerDay,
         dailyXPGoal,
         startDate,
         targetRetention,
@@ -120,18 +128,36 @@ export default function Settings() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `deutsche-reise-backup-${new Date().toISOString().split('T')[0]}.json`
+    a.download = `deutsche-reise-words-${new Date().toISOString().split('T')[0]}.json`
     a.click()
     URL.revokeObjectURL(url)
   }
 
-  const handleImportData = (e) => {
+  const handleExportFullBackup = async () => {
+    await initDB()
+    const data = await exportFullBackup()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `deutsche-reise-FULL-${new Date().toISOString().split('T')[0]}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleImportFilePick = (e) => {
     const file = e.target.files[0]
     if (!file) return
     const reader = new FileReader()
     reader.onload = async (ev) => {
       try {
         const data = JSON.parse(ev.target.result)
+        if (data.format === 'deutsche-reise-full-backup') {
+          setPendingFullBackupFile(ev.target.result)
+          setFullRestoreConfirm(true)
+          e.target.value = ''
+          return
+        }
         if (data.words) {
           const result = await importWords(data.words)
           const t = data.settings?.targetRetention
@@ -140,6 +166,8 @@ export default function Settings() {
             if (Number.isFinite(v) && v >= 0.8 && v <= 0.97) setTargetRetention(v)
           }
           alert(`Imported ${result.added} words, ${result.skipped} already existed.`)
+        } else {
+          alert('Unrecognized backup format.')
         }
       } catch {
         alert('Invalid backup file.')
@@ -147,6 +175,20 @@ export default function Settings() {
     }
     reader.readAsText(file)
     e.target.value = ''
+  }
+
+  const runFullRestore = async () => {
+    if (!pendingFullBackupFile) return
+    try {
+      await initDB()
+      await importFullBackup(pendingFullBackupFile)
+      setFullRestoreConfirm(false)
+      setPendingFullBackupFile(null)
+      alert('Full restore complete. The app will reload.')
+      window.location.reload()
+    } catch (err) {
+      alert(err?.message || 'Full restore failed.')
+    }
   }
 
   const handleResetProgress = async () => {
@@ -250,7 +292,9 @@ export default function Settings() {
     <div className="max-w-2xl mx-auto space-y-5">
       <div className="mb-2">
         <h2 className="text-xl font-bold text-white">Settings</h2>
-        <p className="text-sm text-slate-400">Configure Deutsche Reise</p>
+        <p className="text-sm text-slate-400">
+          First-week help: <code className="text-slate-500">public/FIRST_WEEK_GUIDE.txt</code>
+        </p>
       </div>
 
       {/* API Key */}
@@ -386,15 +430,35 @@ export default function Settings() {
               onChange={e => setNewCardsPerDay(Math.min(30, Math.max(5, parseInt(e.target.value) || 15)))}
               className="input-field w-24 text-center"
             />
-            <span className="text-sm text-slate-400">cards (5–30)</span>
+            <span className="text-sm text-slate-400">(5–30)</span>
           </div>
         </div>
 
         <div>
-          <label className="text-sm text-slate-400 block mb-1.5">SRS retention target</label>
-          <p className="text-xs text-slate-500 mb-2">
-            ~90% is the usual sweet spot; higher means more daily reviews. Used to scale review intervals.
-          </p>
+          <label className="text-sm text-slate-400 block mb-1.5">Frequency Lab — words per day (goal)</label>
+          <div className="flex items-center gap-3">
+            <input
+              type="number"
+              min={5}
+              max={40}
+              value={frequencyWordsPerDay}
+              onChange={e => setFrequencyWordsPerDay(parseInt(e.target.value, 10) || 25)}
+              className="input-field w-24 text-center"
+            />
+            <span className="text-sm text-slate-400">words (5–40)</span>
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-surface-800/50 border border-surface-700 p-3">
+          <Link to="/placement" className="text-sm text-brand-400 hover:underline font-medium">
+            SRS Placement →
+          </Link>
+          <span className="text-xs text-slate-500 ml-2">clear “new” backlog</span>
+        </div>
+
+        <div>
+          <label className="text-sm text-slate-400 block mb-1.5">SRS retention target (%)</label>
+          <p className="text-xs text-slate-500 mb-2">Explained in FIRST_WEEK_GUIDE.txt — higher = more reviews.</p>
           <div className="flex flex-wrap gap-2">
             {[0.85, 0.88, 0.9, 0.93].map((t) => (
               <button
@@ -487,9 +551,7 @@ export default function Settings() {
 
       {/* Vocabulary maintenance */}
       <Section title="Vocabulary Maintenance" icon={BookMarked}>
-        <p className="text-sm text-slate-400">
-          Use DeepSeek to merge conjugations and gendered pairs into single cards. Your SRS progress on the kept card is preserved.
-        </p>
+        <p className="text-sm text-slate-400">Merge duplicate forms into one card (AI). Keeps review history on the kept card.</p>
         <Button
           onClick={openRegroupConfirm}
           variant="secondary"
@@ -540,19 +602,27 @@ export default function Settings() {
         </div>
         <div className="flex flex-wrap gap-3">
           <Button
-            onClick={handleExportData}
+            onClick={handleExportFullBackup}
             variant="secondary"
             size="sm"
             icon={<Download size={14} />}
           >
-            Export All Data
+            Export full backup
+          </Button>
+          <Button
+            onClick={handleExportWordsOnly}
+            variant="secondary"
+            size="sm"
+            icon={<Download size={14} />}
+          >
+            Export words only
           </Button>
 
           <label className="cursor-pointer">
-            <input type="file" accept=".json" onChange={handleImportData} className="hidden" />
+            <input type="file" accept=".json" onChange={handleImportFilePick} className="hidden" />
             <div className="flex items-center gap-2 px-3 py-2 bg-surface-800 hover:bg-surface-700 text-slate-300 hover:text-white text-sm font-semibold rounded-xl border border-surface-700 hover:border-surface-600 transition-all cursor-pointer">
               <Upload size={14} />
-              Import Backup
+              Import backup
             </div>
           </label>
 
@@ -575,9 +645,30 @@ export default function Settings() {
           </Button>
         </div>
         <p className="text-xs text-slate-500">
-          Export saves all your words and SRS data as JSON for backup.
+          Full backup = everything local except the API key. Words only = vocabulary merge. See FIRST_WEEK_GUIDE.txt.
         </p>
       </Section>
+
+      <Modal
+        isOpen={fullRestoreConfirm}
+        onClose={() => {
+          setFullRestoreConfirm(false)
+          setPendingFullBackupFile(null)
+        }}
+        title="Replace everything?"
+        size="sm"
+      >
+        <p className="text-slate-300 text-sm mb-4">
+          This will <strong className="text-red-300">delete all local progress</strong> and replace it with the backup
+          (words, flashcard intervals, stories, sessions). Your API key in Settings is not changed.
+        </p>
+        <div className="flex gap-2">
+          <Button variant="danger" onClick={runFullRestore}>Restore and reload</Button>
+          <Button variant="secondary" onClick={() => { setFullRestoreConfirm(false); setPendingFullBackupFile(null) }}>
+            Cancel
+          </Button>
+        </div>
+      </Modal>
 
       {/* Reset confirm */}
       <Modal isOpen={resetConfirm} onClose={() => setResetConfirm(false)} title="Reset SRS Progress" size="sm">

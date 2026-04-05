@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Search, Upload, Plus, Volume2, Trash2, Download, Copy,
-  Filter, BookMarked, AlertCircle, Loader2, Sparkles, ChevronRight,
+  Filter, BookMarked, AlertCircle, Loader2, Sparkles, ChevronRight, Package,
 } from 'lucide-react'
 import {
   getAllWords, getWordCount, importWords, addWord, deleteWord, getCardForWord,
@@ -67,6 +67,19 @@ export default function VocabVault() {
   const [practiceSentence, setPracticeSentence] = useState('')
   const [practiceBusy, setPracticeBusy] = useState(false)
   const fileRef = useRef(null)
+  const [bundledBaseline, setBundledBaseline] = useState(null)
+
+  useEffect(() => {
+    fetch('/data/baseline-vocab.json')
+      .then((r) => r.json())
+      .then((d) =>
+        setBundledBaseline({
+          count: typeof d.count === 'number' ? d.count : (d.entries || []).length,
+          note: d.note || '',
+        })
+      )
+      .catch(() => setBundledBaseline({ count: 0, note: '' }))
+  }, [])
 
   const loadWords = async () => {
     const [allWords] = await Promise.all([getAllWords()])
@@ -87,7 +100,7 @@ export default function VocabVault() {
   }, [])
 
   const filtered = useMemo(() => {
-    let list = words
+    let list = [...words].sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0))
     if (search) {
       const q = search.toLowerCase()
       list = list.filter(w =>
@@ -227,6 +240,58 @@ export default function VocabVault() {
     setImportStatus('')
   }
 
+  /** Same pipeline as paste import, but from baked `public/data/baseline-vocab.json` (from words.txt at build). */
+  const handleBundledBaselineImport = async () => {
+    setImporting(true)
+    setImportStatus('')
+    try {
+      const res = await fetch('/data/baseline-vocab.json')
+      const data = await res.json()
+      const parsed = Array.isArray(data.entries) ? data.entries : []
+      if (!parsed.length) {
+        showAppToast(
+          data.note ||
+            'No bundled baseline. Put words.txt in the project root and run npm run build:baseline (or npm run build).'
+        )
+        setImporting(false)
+        return
+      }
+      try {
+        const prev = parseInt(localStorage.getItem('dr_vocab_raw_entry_total') || '0', 10)
+        localStorage.setItem('dr_vocab_raw_entry_total', String(prev + parsed.length))
+      } catch { /* ignore */ }
+      const apiKey = localStorage.getItem('dr_api_key')
+      if (apiKey?.trim()) {
+        setImportStatus('🤖 AI is grouping bundled baseline into families...')
+      }
+      const { words: groupedWords, stats: groupingStats } = await prepareGroupedImport(parsed, apiKey, {
+        onBatchProgress: (cur, tot) => {
+          setImportStatus(`🤖 AI grouping batch ${cur} of ${tot}...`)
+        },
+      })
+      setImportStatus('')
+      const result = await importWords(groupedWords, { groupingStats })
+      localStorage.setItem('dr_new_cards_per_day', parsed.length > 500 ? '15' : '20')
+      setImportResult({
+        added: result.added,
+        skipped: result.skipped,
+        groupingStats: result.groupingStats,
+        rawParsed: parsed.length,
+        familyCount: groupedWords.length,
+        groupingMethod: groupingStats?.method,
+        source: 'bundled words.txt',
+      })
+      await loadWords()
+      showAppToast(`Bundled baseline: +${result.added} new families (${result.skipped} already in vault).`)
+      setTimeout(() => setImportResult(null), 14000)
+    } catch (e) {
+      console.error(e)
+      showAppToast(e.message || 'Bundled import failed')
+    }
+    setImporting(false)
+    setImportStatus('')
+  }
+
   const handleFileUpload = (e) => {
     const file = e.target.files[0]
     if (!file) return
@@ -246,6 +311,7 @@ export default function VocabVault() {
     setManualGerman('')
     setManualTranslation('')
     await loadWords()
+    showAppToast('Added — newest words appear at the top of this list.')
   }
 
   const handleDelete = async (id) => {
@@ -322,6 +388,39 @@ export default function VocabVault() {
           >
             Upload .txt
           </Button>
+        </div>
+      </div>
+
+      {/* Bundled baseline — same idea as Frequency list JSON */}
+      <div className="card p-5 border-brand-500/15 bg-surface-900/40">
+        <div className="flex flex-col sm:flex-row sm:items-start gap-4 justify-between">
+          <div className="flex gap-3">
+            <div className="p-2 rounded-xl bg-brand-500/10 border border-brand-500/20 h-fit">
+              <Package size={20} className="text-brand-400" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-white">Bundled baseline (words.txt)</h3>
+              <p className="text-xs text-slate-500 mt-1 max-w-xl">
+                One-click import from the built-in list. Moving PCs: Settings → full backup (see FIRST_WEEK_GUIDE.txt).
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-col items-stretch gap-2 shrink-0">
+            <span className="text-xs text-slate-500 text-right sm:text-left">
+              {bundledBaseline == null
+                ? 'Checking bundle…'
+                : bundledBaseline.count > 0
+                  ? `${bundledBaseline.count.toLocaleString()} entries in bundle`
+                  : 'Bundle empty (add words.txt & build)'}
+            </span>
+            <Button
+              onClick={handleBundledBaselineImport}
+              disabled={importing || !bundledBaseline || bundledBaseline.count === 0}
+              icon={importing ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+            >
+              Import bundled baseline
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -444,9 +543,8 @@ export default function VocabVault() {
 
       <div className="card p-5 space-y-4">
         <h3 className="text-sm font-semibold text-white">Vocab tools</h3>
-        <p className="text-xs text-slate-500 leading-relaxed">
-          Standard Duolingo list format: <strong className="text-slate-400">German line, English line, blank line</strong>
-          — imports use that order. If you ever pasted a list with columns reversed, or old bad data shows English in the German column, use fix once.
+        <p className="text-xs text-slate-500">
+          Paste import: German line, then English, then blank line. Wrong columns? Use fix swap once.
         </p>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -566,6 +664,9 @@ export default function VocabVault() {
         <p className="text-sm text-slate-400">
           {filtered.length.toLocaleString()} {filtered.length === 1 ? 'word' : 'words'}
           {search || activeFilter !== 'All' ? ` (filtered from ${words.length.toLocaleString()})` : ''}
+          {!search && activeFilter === 'All' && words.length > 0 && (
+            <span className="text-slate-600"> · newest at top</span>
+          )}
         </p>
         <div className="flex gap-2">
           <button

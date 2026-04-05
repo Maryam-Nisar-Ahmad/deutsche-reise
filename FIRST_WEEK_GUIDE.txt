@@ -1,0 +1,122 @@
+================================================================================
+DEUTSCHE REISE: FIRST WEEK (plain English)
+================================================================================
+
+This file replaces long on-screen help. With the dev server: http://localhost:5173/FIRST_WEEK_GUIDE.txt
+
+
+1) GITHUB: PUSH ON ONE PC, CLONE ON ANOTHER
+--------------------------------------------------------------------------------
+• The code and bundled word lists in the repo are the same everywhere after you clone.
+• Your personal progress (words, flashcard schedules, stories, Frequency Lab cache)
+  lives in the BROWSER on that computer (IndexedDB), not in Git.
+• Moving machines: in Settings use "Export full backup" on the old machine, copy
+  the JSON file, then "Import backup" on the new one. That is the full picture.
+
+
+2) FREQUENCY LAB: WHAT "MATCH TO VAULT" MEANS
+--------------------------------------------------------------------------------
+• English “meaning” under the headword: the raw list text is messy. If your API
+  key is saved, the app prefetches ~30 short glosses once per “block” (until you
+  move past those ranks), caches them on this device (included in full backup),
+  and hydrates from the cache as you work through that block, not on every word.
+• AI story + extra sentences for the same next ~30 learnable ranks are generated
+  once per block, saved in the same database, and survive closing the app; you can
+  still tap “Regenerate” for the word on screen if you want a fresh version.
+• Your "vault" = words you already saved in the app.
+• The app always skips a frequency lemma if the same headword is already in the
+  vault (even if an old AI run wrongly said "unknown").
+• The AI compares batches to your list and saves "known" or "unknown" for ranks
+  that are not obvious from exact vault matches.
+• "Add to vault" does not create a second copy if that lemma is already stored
+  (same normalized German key).
+
+WHY NOT EDIT THE FILE ONCE?
+• Your vault changes every day. A one-time edit to a text file would go stale.
+• The app stores decisions in the database so you do not have to re-run forever:
+  use "Match whole list once" to walk every rank in batches, or "Next 36 only"
+  for small updates.
+
+MATCH WHOLE LIST: DO I EVER RUN IT AGAIN?
+• If you rarely add words, once can be enough for a long time.
+• Run it again after you import or add many new words so the AI can re-check
+  ranks that are still "unknown" against your bigger vault. Exact matches are
+  marked from the vault without AI.
+
+
+3) MINE CLOZE CARDS (Story Studio)
+--------------------------------------------------------------------------------
+• You already saved vocabulary in the app.
+• "Mine cloze" looks at the story chapter, finds sentences that contain those
+  words, and saves fill-in-the-blank lines (one word hidden) on those words.
+• In Flashcards, some sessions will show that sentence on the front with a blank
+  instead of only the bare word. Then you flip to see the answer and full line.
+• It does not add brand-new vocabulary rows; only extra cloze material for words
+  you already have.
+
+STORY: TAP A WORD → "ADD TO MY LIST"
+--------------------------------------------------------------------------------
+• That button adds the word to your vocabulary and creates a normal flashcard
+  (same as the rest of your list). It is not "review only" (the old name was
+  confusing).
+
+
+4) SRS PLACEMENT
+--------------------------------------------------------------------------------
+• Some cards sit in "new" even though you already know the word (big import).
+• Here you quickly say "I know this" so the app schedules it like an easy review
+  instead of treating it as brand new.
+• Similar idea to rating Easy in flashcards, but this screen is only for clearing
+  the "new" backlog in a focused way.
+• Order: words imported last in your file (usually the bottom of words.txt) are
+  shown first, then earlier lines, so you can knock out words you learned first
+  in real life before the harder/top-of-file ones hit your normal new-card queue.
+
+
+5) VOCAB VAULT LIST ORDER
+--------------------------------------------------------------------------------
+• The word list is sorted with the newest additions at the top (by save time).
+• New-card flashcards also prefer the most recently added words first.
+
+6) FLASHCARDS: "NEW" VS "DUE"
+--------------------------------------------------------------------------------
+• New = you have not graded that card yet (or it is still in the "new" pile).
+• Due = the schedule says it is time to review.
+• After you grade a card, it disappears for a while and comes back later; that is
+  normal for spaced repetition.
+
+
+7) SETTINGS: SRS RETENTION TARGET (PERCENT)
+--------------------------------------------------------------------------------
+• This is the success rate the scheduler tries to keep (e.g. 90%).
+• Higher percent = shorter gaps between reviews = more reviews per day.
+• Lower percent = longer gaps = fewer reviews, but you might forget more.
+• ~88% to 92% is a common comfortable range. Change it if daily reviews feel too
+  heavy or too light.
+
+
+8) DARK / LIGHT MODE
+--------------------------------------------------------------------------------
+• Toggle in Settings. It is stored in the browser (localStorage).
+
+
+9) DEEPSEEK API KEY
+--------------------------------------------------------------------------------
+• Needed for AI features (frequency matching, lessons, some other tools).
+• Stored locally in the browser; not in Git and not inside the full backup.
+
+
+10) DAILY RHYTHM (SHORT)
+--------------------------------------------------------------------------------
+• Flashcards (reviews first), then a few new words / Frequency Lab.
+• Grammar, listening, reading/story, speaking as you have time.
+• The Dashboard still shows a compact schedule; details are optional.
+
+
+11) IF SOMETHING LOOKS BROKEN
+--------------------------------------------------------------------------------
+• Check the browser console (F12) for errors.
+• Confirm API key and network.
+• Try Refresh on Frequency Lab after building data: npm run build:frequency
+
+================================================================================

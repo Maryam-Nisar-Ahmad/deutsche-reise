@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import {
   Home, CreditCard, BookOpen, Dumbbell, Library, Settings,
-  Flame, Zap, ChevronLeft, ChevronRight, Mic,
+  Flame, Zap, ChevronLeft, ChevronRight, Mic, ListOrdered, Target,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { getCardStats, getTotalXP } from '../lib/db'
@@ -11,10 +11,12 @@ import { getLevel, getProgressToNextLevel } from '../lib/levelCalc'
 const navItems = [
   { path: '/',          icon: Home,      label: 'Dashboard' },
   { path: '/flashcards', icon: CreditCard, label: 'Flashcards', badge: true },
+  { path: '/frequency', icon: ListOrdered, label: 'Frequency Lab' },
   { path: '/story',     icon: BookOpen,  label: 'Story Studio' },
   { path: '/grammar',   icon: Dumbbell,  label: 'Grammar Gym' },
   { path: '/speak',     icon: Mic,       label: 'Speak & Write' },
   { path: '/vocab',     icon: Library,   label: 'Vocab Vault' },
+  { path: '/placement', icon: Target,    label: 'SRS Placement' },
 ]
 
 export default function Sidebar({ wordCount, masteredCount = 0, onWidthChange }) {

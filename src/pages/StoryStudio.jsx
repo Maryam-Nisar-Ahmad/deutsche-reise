@@ -614,6 +614,16 @@ export default function StoryStudio() {
                 <input type="checkbox" checked={continueTopic} onChange={e => setContinueTopic(e.target.checked)} />
                 Continue this topic (narrow reading)
               </label>
+              {(() => {
+                const t = genTheme.trim().toLowerCase()
+                const sameThemeCount = t ? stories.filter((s) => (s.theme || '').toLowerCase() === t).length : 0
+                if (!sameThemeCount) return null
+                return (
+                  <p className="text-[11px] text-slate-500 mt-2">
+                    You have {sameThemeCount} stor{sameThemeCount === 1 ? 'y' : 'ies'} on this theme — tick the box to stay on the same topic.
+                  </p>
+                )
+              })()}
             </div>
 
             <div>

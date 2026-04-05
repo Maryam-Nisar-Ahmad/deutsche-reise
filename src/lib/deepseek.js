@@ -48,7 +48,11 @@ async function deepSeekFetch(messages, apiKeyOverride, temperature, maxTokens) {
   }
 
   const data = await response.json()
-  return data.choices[0].message.content
+  const content = data?.choices?.[0]?.message?.content
+  if (content == null || content === '') {
+    throw new Error(`DeepSeek: empty response (${JSON.stringify(data).slice(0, 200)})`)
+  }
+  return content
 }
 
 /**
@@ -79,10 +83,21 @@ export async function callDeepSeek(messages, apiKey = null, options = {}) {
 
 /** Internal: uses dr_api_key from localStorage. */
 async function invokeDeepSeek({ systemPrompt, userPrompt, messages, temperature = 0.7, maxTokens = 2000 }) {
-  const msgs = messages ?? [
-    ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-    ...(userPrompt != null ? [{ role: 'user', content: userPrompt }] : []),
-  ]
+  let msgs
+  if (Array.isArray(messages) && messages.length > 0) {
+    msgs = [
+      ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+      ...messages,
+    ]
+  } else {
+    msgs = [
+      ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+      ...(userPrompt != null && userPrompt !== '' ? [{ role: 'user', content: userPrompt }] : []),
+    ]
+  }
+  if (!msgs.length) {
+    throw new Error('DeepSeek: empty request (misconfigured call)')
+  }
   return deepSeekFetch(msgs, null, temperature, maxTokens)
 }
 
@@ -102,7 +117,8 @@ function isProbablyGermanStory(text) {
 }
 
 export async function generateStory({ theme, words, level, chapterCount = 6, previousTopicWords = [] }) {
-  const wordList = shuffleArray(words).slice(0, 200)
+  // Large sample so stories align with comprehensible input from the full vault (research: i+1, narrow vocab).
+  const wordList = shuffleArray(words).slice(0, 380)
     .map(w => `${w.german} (${w.translation})`).join(', ')
 
   const systemPrompt = `You are a German language story generator for a learner at ${level} level. You write engaging German mini-novels.
@@ -329,6 +345,167 @@ Remember: explain IN ENGLISH, use German only for examples.`
     { role: 'user', content: latestMessage }
   ]
   return invokeDeepSeek({ messages, temperature: 0.7, maxTokens: 300 })
+}
+
+/**
+ * Map frequency-list rows to known/unknown vs learner vault (lemmas, inflections, phrases).
+ * @param {Array<{rank: number, headword: string, detail?: string}>} batch
+ * @param {Array<{german: string, translation?: string, variants?: string[]}>} vaultWords
+ */
+export async function matchFrequencyEntriesToVault(batch, vaultWords) {
+  const vaultLines = (vaultWords || []).slice(0, 800).map((w, i) => {
+    const vars = (w.variants || []).filter(Boolean).slice(0, 6).join('; ')
+    return `${i + 1}. ${w.german} — ${(w.translation || '').slice(0, 60)}${vars ? ` | variants: ${vars}` : ''}`
+  }).join('\n')
+
+  const freqLines = (batch || []).map((e) => `${e.rank}. "${e.headword}" — ${String(e.detail || '').slice(0, 120)}`).join('\n')
+
+  const userPrompt = `You are a German linguist. The learner's vocabulary vault (already studied) is listed below.
+The frequency list uses corpus rank: LOWER rank number = MORE frequent in German.
+
+For EACH numbered frequency entry, decide if the learner already "knows" this item well enough that they should SKIP it in a frequency curriculum (same lemma/family, including if vault has inflected form and frequency line is another form).
+
+Return ONLY valid JSON, no markdown:
+{"results":[{"rank":number,"status":"known"|"unknown","note":"max 15 words"}]}
+
+VAULT (learner already has these):
+${vaultLines || '(empty)'}
+
+FREQUENCY BATCH (decide known vs unknown):
+${freqLines}`
+
+  const result = await invokeDeepSeek({
+    systemPrompt: 'You return only valid JSON. No markdown fences.',
+    userPrompt,
+    temperature: 0.05,
+    maxTokens: 4000,
+  })
+  try {
+    let text = String(result || '').trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '')
+    const first = text.indexOf('{')
+    const last = text.lastIndexOf('}')
+    if (first >= 0 && last > first) text = text.slice(first, last + 1)
+    const parsed = JSON.parse(text)
+    return Array.isArray(parsed.results) ? parsed.results : []
+  } catch (e) {
+    throw new Error(`Could not parse AI match response: ${e?.message || 'invalid JSON'}`)
+  }
+}
+
+/**
+ * Clean one-line English gloss per rank (Frequency Lab). Batch ≤ 32.
+ * @param {Array<{rank: number, headword: string, detailSnippet?: string}>} batch
+ * @returns {Promise<Array<{rank: number, glossEn: string}>>}
+ */
+export async function polishFrequencyGlossesBatch(batch) {
+  const items = (batch || []).filter((e) => e && e.rank != null && e.headword)
+  if (!items.length) return []
+
+  const lines = items
+    .map((e) => `${e.rank}. "${e.headword}" — ${String(e.detailSnippet || '').slice(0, 220)}`)
+    .join('\n')
+
+  const userPrompt = `You write concise English dictionary-style glosses for German flashcards.
+
+For EACH numbered line below, output one "glossEn" string:
+- Under ~90 characters when possible.
+- Start with part of speech abbreviation if clear (conj., prep., pron., v., art., adv., etc.) then meaning.
+- Multiple senses: join with "; " (at most 3 short fragments).
+- No full sentences; no repeating the German word unless necessary.
+- Use the German snippet only for disambiguation.
+
+LINES:
+${lines}
+
+Return ONLY valid JSON, no markdown:
+{"results":[{"rank":number,"glossEn":"..."}]}`
+
+  const result = await invokeDeepSeek({
+    systemPrompt: 'You return only valid JSON. No markdown fences.',
+    userPrompt,
+    temperature: 0.08,
+    maxTokens: 4500,
+  })
+  try {
+    let text = String(result || '').trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '')
+    const first = text.indexOf('{')
+    const last = text.lastIndexOf('}')
+    if (first >= 0 && last > first) text = text.slice(first, last + 1)
+    const parsed = JSON.parse(text)
+    const raw = Array.isArray(parsed.results) ? parsed.results : []
+    return raw
+      .map((r) => ({
+        rank: Number(r.rank),
+        glossEn: String(r.glossEn || '')
+          .trim()
+          .replace(/\s+/g, ' ')
+          .slice(0, 240),
+      }))
+      .filter((r) => Number.isFinite(r.rank) && r.glossEn.length > 0)
+  } catch (e) {
+    throw new Error(`Could not parse gloss batch response: ${e?.message || 'invalid JSON'}`)
+  }
+}
+
+/**
+ * Gloss + example sentences + i+1 story for Frequency Lab.
+ */
+export async function generateFrequencyWordLesson({
+  headword,
+  rank,
+  detailSnippet,
+  knownGermanWords,
+  cefrHint = 'A2',
+}) {
+  const known = shuffleArray(knownGermanWords || [])
+    .slice(0, 120)
+    .join(', ')
+
+  const userPrompt = `Create a micro-lesson for a German learner (goal B2 in 7 months). CEFR about ${cefrHint}.
+
+Target word (must appear naturally in story): "${headword}"
+Corpus frequency rank: ${rank} (lower = more frequent)
+Dictionary snippet: ${String(detailSnippet || '').slice(0, 500)}
+
+Use mostly words from this KNOWN list for all German sentences and the story (comprehensible input / i+1):
+${known}
+
+Rules:
+- 4 short German example sentences using the target word (different contexts). Each with accurate English translation.
+- One German mini-story (70–110 words) that uses the target word at least twice and otherwise prefers the known list.
+- Plain style, no markdown in German fields.
+
+Return ONLY valid JSON:
+{
+  "glossShort": "English gloss, max 14 words",
+  "sentences": [{"de":"German sentence","en":"English translation"}],
+  "storyDe": "German story only",
+  "storyEn": "English summary of the story"
+}`
+
+  const result = await invokeDeepSeek({
+    systemPrompt: 'You return only valid JSON. Escape any double quotes inside German strings with backslash. No markdown.',
+    userPrompt,
+    temperature: 0.45,
+    maxTokens: 2500,
+  })
+  let text = String(result || '').trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '')
+  const first = text.indexOf('{')
+  const last = text.lastIndexOf('}')
+  if (first >= 0 && last > first) text = text.slice(first, last + 1)
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch (e) {
+    throw new Error(
+      `AI lesson JSON parse failed (${e?.message || 'parse error'}). Try again, or shorten your vault / check API quota.`
+    )
+  }
+  if (!parsed || typeof parsed.storyDe !== 'string' || !parsed.storyDe.trim()) {
+    throw new Error('AI returned JSON but no story. Try "AI: story + extra sentences" again.')
+  }
+  if (!Array.isArray(parsed.sentences)) parsed.sentences = []
+  return parsed
 }
 
 export async function testConnection() {

@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build:baseline": "node scripts/build-baseline-words.mjs",
+    "build:frequency": "node scripts/build-frequency-data.mjs",
+    "build": "node scripts/build-baseline-words.mjs && node scripts/build-frequency-data.mjs && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

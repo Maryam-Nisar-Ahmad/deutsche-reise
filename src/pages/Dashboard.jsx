@@ -5,11 +5,13 @@ import { CreditCard, BookOpen, Dumbbell, BookMarked, Clock, Brain, Flame } from 
 import { getWordCount, getCardStats, getTodaySession, getWeekSessions, addXP, sumStudyMinutesFromSession, updateTodaySession, getGrammarSessionsThisWeek, initDB } from '../lib/db'
 import { useStreak } from '../hooks/useStreak'
 import { useSettings } from '../hooks/useSettings'
+import ResearchSchedule from '../components/dashboard/ResearchSchedule'
 import StreakCard from '../components/dashboard/StreakCard'
 import LevelMeter from '../components/dashboard/LevelMeter'
 import DailyPlan from '../components/dashboard/DailyPlan'
 import WeekHeatmap from '../components/dashboard/WeekHeatmap'
 import { showXPToast } from '../components/shared/XPToast'
+import { estimateWeeklyReviewLoad } from '../lib/reviewLoad'
 
 function getCoverageInfo(knownWordCount) {
   if (knownWordCount < 1000) return { coverage: '< 78%', cefr: 'A1', nextMilestone: 1000, label: '1,000 words = 78% text coverage (A2)' }
@@ -25,15 +27,15 @@ function getCurrentPhase() {
   const now = new Date()
   const daysElapsed = Math.max(0, Math.floor((now - start) / 86400000))
   const month = Math.floor(daysElapsed / 30) + 1
-  if (month <= 2) return { phase: 1, name: 'Foundation', daysRemaining: Math.max(0, 60 - daysElapsed), color: 'from-blue-500/20 to-cyan-500/10', desc: 'Focus on vocabulary (15–20 new cards/day), basic grammar, and short story chapters. Mine cloze cards from stories.', today: 'Today: Flashcards → Story (mine cloze) → Grammar Gym → Speak & Write (short)' }
-  if (month <= 4) return { phase: 2, name: 'Input Immersion', daysRemaining: Math.max(0, 120 - daysElapsed), color: 'from-purple-500/20 to-indigo-500/10', desc: 'Reduce new cards toward 10/day. Prioritize Story Studio, listening, and narrow reading. Keep daily written output.', today: 'Today: Reviews → Story listening + cloze mining → Speak & Write' }
-  return { phase: 3, name: 'Output & Fluency', daysRemaining: Math.max(0, 210 - daysElapsed), color: 'from-green-500/20 to-emerald-500/10', desc: 'Heavy immersion + production. Interleaved grammar, longer Speak & Write, exam-style tasks.', today: 'Today: Reviews, interleaved grammar, Speak & Write, shadowing' }
+  if (month <= 2) return { phase: 1, name: 'Foundation', daysRemaining: Math.max(0, 60 - daysElapsed), color: 'from-blue-500/20 to-cyan-500/10', desc: 'Vocabulary + grammar + short stories.', today: 'Cards → Story → Grammar → Speak' }
+  if (month <= 4) return { phase: 2, name: 'Input Immersion', daysRemaining: Math.max(0, 120 - daysElapsed), color: 'from-purple-500/20 to-indigo-500/10', desc: 'More listening/reading; keep some output.', today: 'Reviews → Story → Speak' }
+  return { phase: 3, name: 'Output & Fluency', daysRemaining: Math.max(0, 210 - daysElapsed), color: 'from-green-500/20 to-emerald-500/10', desc: 'Speaking/writing + mixed practice.', today: 'Reviews + Speak + Grammar' }
 }
 
 export default function Dashboard() {
   const navigate = useNavigate()
   const { streakCount, isActiveToday, incrementStreak } = useStreak()
-  const { dailyXPGoal } = useSettings()
+  const { dailyXPGoal, frequencyWordsPerDay, newCardsPerDay } = useSettings()
   const [wordCount, setWordCount] = useState(0)
   const [stats, setStats] = useState({ due: 0, new: 0, learning: 0, review: 0, relearning: 0, total: 0 })
   const [session, setSession] = useState(null)
@@ -66,9 +68,9 @@ export default function Dashboard() {
         localStorage.setItem('dr_new_cards_per_day', '20')
         setPhaseSuggestion('Phase 1 cap applied: new cards/day set to 20.')
       } else if (p.phase === 2 && newCards >= 20) {
-        setPhaseSuggestion('Suggestion: reduce new cards/day to 10 for better immersion balance.')
+        setPhaseSuggestion('Tip: try fewer new cards/day if reviews pile up.')
       } else if (p.phase === 3 && grammarWeekCount < 2) {
-        setPhaseSuggestion('B2 push: use Speak & Write most days plus Grammar Gym or shadowing.')
+        setPhaseSuggestion('Tip: add Speak & Grammar most weeks.')
       } else {
         setPhaseSuggestion('')
       }
@@ -89,11 +91,11 @@ export default function Dashboard() {
   try {
     rawEntryTotal = parseInt(localStorage.getItem('dr_vocab_raw_entry_total') || '0', 10)
   } catch { /* ignore */ }
-  const vocabTooltip =
-    'Duolingo counts each verb form separately. Your true vocabulary size is measured by unique word families — the root word and all its forms.'
+  const vocabTooltip = 'Unique families vs raw entries — see FIRST_WEEK_GUIDE.txt'
   const passiveMinutes = session?.passiveMinutes || 0
   const passivePct = Math.min(100, Math.round((passiveMinutes / 90) * 100))
   const wordsToB2 = Math.max(0, 4000 - wordCount)
+  const reviewLoad = estimateWeeklyReviewLoad({ dueCount: stats.due, newCardsPerDay })
 
   const addPassiveMinutes = async (mins) => {
     const current = session || await getTodaySession()
@@ -170,6 +172,11 @@ export default function Dashboard() {
         </span>
       </p>
 
+      <p className="text-[11px] text-slate-500 text-center px-2 max-w-2xl mx-auto">
+        {reviewLoad.summary}{' '}
+        <span className="text-slate-600">(see public/FIRST_WEEK_GUIDE.txt)</span>
+      </p>
+
       {/* Stats strip */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
@@ -195,8 +202,14 @@ export default function Dashboard() {
 
       {/* Daily Plan + Heatmap */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2">
-          <DailyPlan session={session} dueCount={stats.due} dailyXPGoal={dailyXPGoal} />
+        <div className="lg:col-span-2 space-y-4">
+          <DailyPlan
+            session={session}
+            dueCount={stats.due}
+            dailyXPGoal={dailyXPGoal}
+            frequencyWordsGoal={frequencyWordsPerDay}
+          />
+          <ResearchSchedule />
         </div>
         <WeekHeatmap sessions={weekSessions} />
       </div>
@@ -230,6 +243,32 @@ export default function Dashboard() {
           <div className="h-full bg-teal-400" style={{ width: `${passivePct}%` }} />
         </div>
         <p className="text-xs text-slate-500">Tip: Queue a German podcast for your commute. Even unfocused listening trains your ear.</p>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+          <a
+            href="https://www.dw.com/de/themen/s-8422"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-brand-400 hover:underline"
+          >
+            Deutsche Welle (topics)
+          </a>
+          <a
+            href="https://slowgerman.com/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-brand-400 hover:underline"
+          >
+            Slow German
+          </a>
+          <a
+            href="https://www.podcast.de/suche/?q=deutsch"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-brand-400 hover:underline"
+          >
+            Podcast.de search
+          </a>
+        </div>
       </div>
 
       {/* Quick access */}

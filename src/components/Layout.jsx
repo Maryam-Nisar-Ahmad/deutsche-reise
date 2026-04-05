@@ -11,10 +11,12 @@ import { getWordCount, getTodaySession, getMasteredWordCount } from '../lib/db'
 const PAGE_TITLES = {
   '/': 'Dashboard',
   '/flashcards': 'Flashcards',
+  '/frequency': 'Frequency Lab',
   '/story': 'Story Studio',
   '/grammar': 'Grammar Gym',
   '/speak': 'Speak & Write',
   '/vocab': 'Vocab Vault',
+  '/placement': 'SRS Placement',
   '/settings': 'Settings',
 }
 

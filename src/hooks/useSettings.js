@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { applyTheme } from '../lib/theme.js'
 
 export function useSettings() {
   const [apiKey, setApiKeyState] = useState(
@@ -17,6 +18,9 @@ export function useSettings() {
     const t = parseFloat(localStorage.getItem('dr_target_retention') || '0.9')
     return Number.isFinite(t) && t >= 0.8 && t <= 0.97 ? t : 0.9
   })
+  const [frequencyWordsPerDay, setFrequencyWordsPerDayState] = useState(
+    () => parseInt(localStorage.getItem('dr_frequency_words_per_day') || '25', 10)
+  )
 
   const setApiKey = (key) => {
     const trimmed = key.trim()
@@ -31,7 +35,7 @@ export function useSettings() {
 
   const setDarkMode = (val) => {
     localStorage.setItem('dr_dark_mode', String(val))
-    document.documentElement.classList.toggle('dark', val)
+    applyTheme(val)
     setDarkModeState(val)
   }
 
@@ -46,6 +50,12 @@ export function useSettings() {
     setTargetRetentionState(v)
   }
 
+  const setFrequencyWordsPerDay = (n) => {
+    const v = Math.max(5, Math.min(40, parseInt(n, 10) || 25))
+    localStorage.setItem('dr_frequency_words_per_day', String(v))
+    setFrequencyWordsPerDayState(v)
+  }
+
   return {
     apiKey,
     setApiKey,
@@ -57,5 +67,7 @@ export function useSettings() {
     setDailyXPGoal,
     targetRetention,
     setTargetRetention,
+    frequencyWordsPerDay,
+    setFrequencyWordsPerDay,
   }
 }

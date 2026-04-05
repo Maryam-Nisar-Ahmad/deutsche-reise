@@ -1,7 +1,18 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<!-- translate="no" + notranslate: stop Chrome/Edge from auto-translating German study text into English -->
+<html lang="en" translate="no" class="notranslate">
 <head>
+  <script>
+    (function () {
+      try {
+        var dark = localStorage.getItem('dr_dark_mode') !== 'false'
+        document.documentElement.classList.toggle('theme-light', !dark)
+        document.documentElement.classList.toggle('dark', dark)
+      } catch (e) {}
+    })()
+  </script>
   <meta charset="UTF-8" />
+  <meta name="google" content="notranslate" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Deutsche Reise</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">

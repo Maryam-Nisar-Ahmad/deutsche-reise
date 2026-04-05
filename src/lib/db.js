@@ -4,14 +4,14 @@ import { getFrequencyTier, normalizeGerman, germanLikenessScore, orientGermanEng
 import { extractNormalizedKeysFromText, splitIntoSentences } from './storyMining.js'
 
 const DB_NAME = 'deutsche-reise-db'
-const DB_VERSION = 1
+const DB_VERSION = 4
 
 let dbPromise = null
 
 export function initDB() {
   if (dbPromise) return dbPromise
   dbPromise = openDB(DB_NAME, DB_VERSION, {
-    upgrade(db) {
+    upgrade(db, oldVersion) {
       // Words store
       if (!db.objectStoreNames.contains('words')) {
         const wordStore = db.createObjectStore('words', { keyPath: 'id', autoIncrement: true })
@@ -38,6 +38,16 @@ export function initDB() {
       // Daily sessions store
       if (!db.objectStoreNames.contains('daily_sessions')) {
         db.createObjectStore('daily_sessions', { keyPath: 'date' })
+      }
+
+      if (oldVersion < 2 && !db.objectStoreNames.contains('frequency_status')) {
+        db.createObjectStore('frequency_status', { keyPath: 'rank' })
+      }
+      if (oldVersion < 3 && !db.objectStoreNames.contains('frequency_gloss')) {
+        db.createObjectStore('frequency_gloss', { keyPath: 'rank' })
+      }
+      if (oldVersion < 4 && !db.objectStoreNames.contains('frequency_lesson')) {
+        db.createObjectStore('frequency_lesson', { keyPath: 'rank' })
       }
     }
   })
@@ -107,14 +117,16 @@ export async function importWords(wordsArray, meta = {}) {
         translation: (word.translation || '').trim() || 'Imported',
         normalizedKey: word.normalizedKey,
         addedAt: Date.now(),
-        source: 'import',
+        source: word.source || 'import',
+        learnSource: word.learnSource || null,
+        frequencyRank: word.frequencyRank ?? null,
         gender: null,
         plural: null,
-        example: null,
+        example: word.example || null,
         variants,
         frequencyTier: tier,
         encounterCount: 0,
-        storyClozes: [],
+        storyClozes: Array.isArray(word.storyClozes) ? word.storyClozes : [],
       }
       const wordId = await wordStore.add(wordData)
 
@@ -170,6 +182,8 @@ export async function addWord(german, translation) {
     normalizedKey,
     addedAt: Date.now(),
     source: 'manual',
+    learnSource: null,
+    frequencyRank: null,
     gender: null,
     plural: null,
     example: null,
@@ -195,6 +209,183 @@ export async function addWord(german, translation) {
 
   await tx.done
   return { wordId, alreadyExists: false }
+}
+
+/**
+ * Add a word from the frequency curriculum (prioritized in getNewCards).
+ * @param {string} german
+ * @param {string} translation
+ * @param {number} frequencyRank
+ * @param {{ seedClozes?: Array<object>, example?: string }} [options]
+ */
+export async function addWordFromFrequency(german, translation, frequencyRank, options = {}) {
+  const db = await getDB()
+  const g = String(german || '').trim()
+  if (!g) return { wordId: null, alreadyExists: true, error: 'empty' }
+  const normalizedKey = normalizeGerman(g)
+
+  const tx = db.transaction(['words', 'srs_cards'], 'readwrite')
+  const wordStore = tx.objectStore('words')
+  const cardStore = tx.objectStore('srs_cards')
+
+  const existing = await wordStore.index('normalizedKey').get(normalizedKey)
+  if (existing) {
+    await tx.done
+    return { wordId: existing.id, alreadyExists: true }
+  }
+
+  const seedClozes = Array.isArray(options.seedClozes) ? options.seedClozes : []
+  const wordId = await wordStore.add({
+    german: g,
+    translation: (translation || '').trim() || 'Imported',
+    normalizedKey,
+    addedAt: Date.now(),
+    source: 'frequency',
+    learnSource: 'frequency',
+    frequencyRank: frequencyRank ?? null,
+    gender: null,
+    plural: null,
+    example: options.example || null,
+    variants: [],
+    frequencyTier: Math.min(2, getFrequencyTier(g) || 1),
+    encounterCount: 0,
+    storyClozes: seedClozes,
+  })
+
+  await cardStore.add({
+    wordId,
+    easeFactor: 2.5,
+    interval: 0,
+    repetitions: 0,
+    nextReview: getNextReviewTimestamp(1),
+    lastReview: null,
+    lapses: 0,
+    state: 'new',
+    totalReviews: 0,
+    stability: 1,
+    difficulty: 5,
+  })
+
+  await tx.done
+  return { wordId, alreadyExists: false }
+}
+
+// ─── Frequency list (AI match cache) ─────────────────────────────────────────
+
+export async function getFrequencyStatus(rank) {
+  const db = await getDB()
+  return safeGet(db, 'frequency_status', rank, 'getFrequencyStatus')
+}
+
+export async function putFrequencyStatus(rank, payload) {
+  const db = await getDB()
+  await safePut(
+    db,
+    'frequency_status',
+    {
+      rank,
+      status: payload.status,
+      note: payload.note || '',
+      updatedAt: Date.now(),
+    },
+    'putFrequencyStatus'
+  )
+}
+
+export async function putFrequencyStatusesBatch(entries) {
+  const db = await getDB()
+  for (const e of entries) {
+    if (e == null || e.rank == null) continue
+    await safePut(
+      db,
+      'frequency_status',
+      {
+        rank: e.rank,
+        status: e.status,
+        note: e.note || '',
+        updatedAt: Date.now(),
+      },
+      'putFrequencyStatusesBatch'
+    )
+  }
+}
+
+export async function getAllFrequencyStatuses() {
+  const db = await getDB()
+  return safeGetAll(db, 'frequency_status', 'getAllFrequencyStatuses')
+}
+
+/** Cached short English gloss for a frequency rank (AI-polished). */
+export async function getFrequencyGloss(rank) {
+  const db = await getDB()
+  return safeGet(db, 'frequency_gloss', rank, 'getFrequencyGloss')
+}
+
+export async function putFrequencyGlossesBatch(rows) {
+  const db = await getDB()
+  for (const r of rows || []) {
+    if (r == null || r.rank == null) continue
+    const glossEn = String(r.glossEn || '').trim().slice(0, 240)
+    if (!glossEn) continue
+    await safePut(
+      db,
+      'frequency_gloss',
+      { rank: r.rank, glossEn, updatedAt: Date.now() },
+      'putFrequencyGlossesBatch'
+    )
+  }
+}
+
+/** Cached AI micro-lesson (story + sentences) for a frequency rank. */
+export async function getFrequencyLesson(rank) {
+  const db = await getDB()
+  return safeGet(db, 'frequency_lesson', rank, 'getFrequencyLesson')
+}
+
+export async function putFrequencyLesson(rank, lesson) {
+  const db = await getDB()
+  if (rank == null || !lesson || typeof lesson !== 'object') return
+  await safePut(
+    db,
+    'frequency_lesson',
+    { rank, lesson, updatedAt: Date.now() },
+    'putFrequencyLesson'
+  )
+}
+
+/** Normalized keys + variants for vault (frequency matching). */
+export function buildVaultKeySet(words) {
+  const set = new Set()
+  for (const w of words || []) {
+    set.add(normalizeGerman(w.german))
+    for (const v of w.variants || []) {
+      set.add(normalizeGerman(v))
+    }
+  }
+  return set
+}
+
+export async function getWordsFromFrequencySource() {
+  const words = await getAllWords()
+  return words.filter((w) => w.learnSource === 'frequency' || w.source === 'frequency')
+}
+
+/**
+ * New cards stuck in `new` (backlog) — for SRS Placement / calibration.
+ * Sort: newest `addedAt` first. For a single top-to-bottom import (e.g. words.txt),
+ * that is the end of the file (last rows imported = slightly later timestamps).
+ */
+export async function getNewCardsForPlacement(limit = 40) {
+  const db = await getDB()
+  const cards = await db.getAllFromIndex('srs_cards', 'state')
+  const fresh = cards.filter((c) => c.state === 'new')
+  const withWords = []
+  for (const card of fresh) {
+    const word = await safeGet(db, 'words', card.wordId, 'getNewCardsForPlacement')
+    if (word) withWords.push({ ...card, word })
+  }
+  withWords.sort((a, b) => (b.word.addedAt || 0) - (a.word.addedAt || 0))
+  return withWords.slice(0, limit)
 }
 
 export async function getAllWords() {
@@ -371,7 +562,8 @@ export async function getNewCards(limit = 15) {
     const word = await safeGet(db, 'words', card.wordId, 'getNewCards')
     if (word) withWords.push({ ...card, word })
   }
-  withWords.sort((a, b) => (a.word.frequencyTier ?? 3) - (b.word.frequencyTier ?? 3))
+  // Newest additions first so recent learning (Frequency Lab, story, manual) hits flashcards soon.
+  withWords.sort((a, b) => (b.word.addedAt || 0) - (a.word.addedAt || 0))
   return withWords.slice(0, limit)
 }
 
@@ -553,6 +745,8 @@ function todayStr() {
 const DEFAULT_DAILY_SESSION = {
   flashcardsReviewed: 0,
   newWordsLearned: 0,
+  frequencyWordsLearned: 0,
+  placementCardsDone: 0,
   storiesRead: 0,
   grammarExercises: 0,
   shadowingMinutes: 0,
@@ -567,6 +761,7 @@ const DEFAULT_DAILY_SESSION = {
   grammarMinutes: 0,
   vocabMinutes: 0,
   speakMinutes: 0,
+  frequencyMinutes: 0,
 }
 
 export async function getTodaySession() {
@@ -585,6 +780,7 @@ const TIMER_FIELD_BY_PAGE_KEY = {
   grammar: 'grammarMinutes',
   vocab: 'vocabMinutes',
   speak: 'speakMinutes',
+  frequency: 'frequencyMinutes',
 }
 
 /** Add whole minutes to today's session for a study page (manual timer Stop & Save). */
@@ -604,7 +800,8 @@ export function sumStudyMinutesFromSession(session) {
     (session.storyShadowMinutes || 0) +
     (session.grammarMinutes || 0) +
     (session.vocabMinutes || 0) +
-    (session.speakMinutes || 0)
+    (session.speakMinutes || 0) +
+    (session.frequencyMinutes || 0)
   )
 }
 
@@ -660,4 +857,109 @@ export async function getGrammarSessionsThisWeek() {
   start.setHours(0, 0, 0, 0)
   start.setDate(start.getDate() - 6)
   return sessions.filter(s => (s.completedAt || 0) >= start.getTime()).length
+}
+
+export const FULL_BACKUP_FORMAT = 'deutsche-reise-full-backup'
+
+/** Words, SRS cards, stories, sessions, frequency AI cache — for moving between machines. */
+export async function exportFullBackup() {
+  const db = await getDB()
+  const [words, srs_cards, stories, grammar_sessions, daily_sessions, frequency_status, frequency_gloss, frequency_lesson] =
+    await Promise.all([
+      safeGetAll(db, 'words', 'exportFullBackup'),
+      safeGetAll(db, 'srs_cards', 'exportFullBackup'),
+      safeGetAll(db, 'stories', 'exportFullBackup'),
+      safeGetAll(db, 'grammar_sessions', 'exportFullBackup'),
+      safeGetAll(db, 'daily_sessions', 'exportFullBackup'),
+      safeGetAll(db, 'frequency_status', 'exportFullBackup'),
+      safeGetAll(db, 'frequency_gloss', 'exportFullBackup'),
+      safeGetAll(db, 'frequency_lesson', 'exportFullBackup'),
+    ])
+  const keys = [
+    'dr_streak_count',
+    'dr_streak_last_date',
+    'dr_streak_grace_used',
+    'dr_start_date',
+    'dr_onboarded',
+    'dr_new_cards_per_day',
+    'dr_frequency_words_per_day',
+    'dr_target_retention',
+    'dr_daily_xp_goal',
+    'dr_vocab_raw_entry_total',
+    'dr_dark_mode',
+  ]
+  const localStorageSnapshot = {}
+  for (const k of keys) {
+    try {
+      const v = localStorage.getItem(k)
+      if (v != null) localStorageSnapshot[k] = v
+    } catch { /* ignore */ }
+  }
+  return {
+    format: FULL_BACKUP_FORMAT,
+    version: 3,
+    exportedAt: new Date().toISOString(),
+    words,
+    srs_cards,
+    stories,
+    grammar_sessions,
+    daily_sessions,
+    frequency_status,
+    frequency_gloss,
+    frequency_lesson,
+    localStorageSnapshot,
+  }
+}
+
+/**
+ * Replace entire DB + restore selected localStorage keys. Caller should confirm with user first.
+ */
+export async function importFullBackup(payload) {
+  const data = typeof payload === 'string' ? JSON.parse(payload) : payload
+  if (!data || data.format !== FULL_BACKUP_FORMAT) {
+    throw new Error('Not a full backup (missing format: deutsche-reise-full-backup).')
+  }
+  const db = await getDB()
+  const stores = [
+    'words',
+    'srs_cards',
+    'stories',
+    'grammar_sessions',
+    'daily_sessions',
+    'frequency_status',
+    'frequency_gloss',
+    'frequency_lesson',
+  ]
+  for (const name of stores) {
+    if (!db.objectStoreNames.contains(name)) continue
+    const tx = db.transaction(name, 'readwrite')
+    await tx.store.clear()
+    await tx.done
+  }
+  const putRows = async (storeName, rows) => {
+    for (const row of rows || []) {
+      await safePut(db, storeName, row, 'importFullBackup')
+    }
+  }
+  await putRows('words', data.words)
+  await putRows('srs_cards', data.srs_cards)
+  await putRows('stories', data.stories)
+  await putRows('grammar_sessions', data.grammar_sessions)
+  await putRows('daily_sessions', data.daily_sessions)
+  await putRows('frequency_status', data.frequency_status)
+  await putRows('frequency_gloss', data.frequency_gloss)
+  await putRows('frequency_lesson', data.frequency_lesson)
+  const snap = data.localStorageSnapshot || {}
+  for (const [k, v] of Object.entries(snap)) {
+    if (typeof v === 'string') {
+      try {
+        localStorage.setItem(k, v)
+      } catch { /* ignore */ }
+    }
+  }
+  return {
+    words: (data.words || []).length,
+    srs_cards: (data.srs_cards || []).length,
+    stories: (data.stories || []).length,
+  }
 }

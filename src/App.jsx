@@ -9,6 +9,8 @@ import VocabVault from './pages/VocabVault'
 import Settings from './pages/Settings'
 import SpeakLab from './pages/SpeakLab'
 import Onboarding from './pages/Onboarding'
+import FrequencyLab from './pages/FrequencyLab'
+import Placement from './pages/Placement'
 
 export default function App() {
   const [onboarded, setOnboarded] = useState(null)
@@ -66,6 +68,8 @@ export default function App() {
           <Route path="/grammar/:focus" element={<GrammarGym />} />
           <Route path="/speak" element={<SpeakLab />} />
           <Route path="/vocab" element={<VocabVault />} />
+          <Route path="/frequency" element={<FrequencyLab />} />
+          <Route path="/placement" element={<Placement />} />
           <Route path="/settings" element={<Settings />} />
         </Route>
         <Route path="*" element={<Navigate to="/" />} />

@@ -4,6 +4,7 @@ import { Volume2, X, Heart, Check, Loader2 } from 'lucide-react'
 import { germanVoice } from '../../lib/voice'
 import { explainWord } from '../../lib/deepseek'
 import { addWord, getAllWords } from '../../lib/db'
+import { showAppToast } from '../shared/XPToast'
 
 function parseExplanation(text) {
   if (!text) return {}
@@ -66,6 +67,7 @@ export default function WordPopup({ word, context, onClose, onSaved }) {
     await addWord(word, meaning)
     setSaved(true)
     onSaved?.()
+    showAppToast('Saved to Vocab Vault — newest words appear at the top of the list.')
   }
 
   const parsed = explanation || {}
@@ -205,10 +207,15 @@ export default function WordPopup({ word, context, onClose, onSaved }) {
           ) : (
             <button
               onClick={handleSave}
-              className="flex-1 flex items-center justify-center gap-2 py-2 bg-brand-500/10 hover:bg-brand-500/20 border border-brand-500/20 rounded-xl text-brand-400 text-sm font-medium transition-colors"
+              className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2.5 bg-brand-500/10 hover:bg-brand-500/20 border border-brand-500/20 rounded-xl text-brand-400 text-sm font-medium transition-colors"
             >
-              <Heart size={16} />
-              Save to Review
+              <span className="flex items-center gap-2">
+                <Heart size={16} />
+                Add to my list
+              </span>
+              <span className="text-[10px] text-slate-500 font-normal px-1">
+                Vocab Vault + Flashcards (starts as a new card)
+              </span>
             </button>
           )}
           <button

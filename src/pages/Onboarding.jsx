@@ -216,7 +216,7 @@ export default function Onboarding({ onComplete }) {
                 </div>
                 <div className="bg-surface-800 rounded-2xl p-5 text-left space-y-3">
                   <p className="text-slate-300">You're starting your journey to German B2.</p>
-                  <p className="text-slate-300">This app uses <strong className="text-white">spaced repetition</strong>, <strong className="text-white">AI stories</strong>, and <strong className="text-white">grammar exercises</strong> to get you to B2 in 7 months.</p>
+                  <p className="text-slate-300">This app uses <strong className="text-white">spaced repetition</strong>, <strong className="text-white">Frequency Lab</strong> (5,009 ranked words + stories), <strong className="text-white">AI stories</strong>, and <strong className="text-white">grammar exercises</strong> to get you to B2 in 7 months.</p>
                   <p className="text-brand-400 font-medium">Let's set up in 2 minutes.</p>
                 </div>
                 <button
