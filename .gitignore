@@ -1,0 +1,15 @@
+# Dependencies (restore with npm install)
+node_modules/
+
+# Local env / secrets (never commit keys)
+.env
+.env.local
+.env.*.local
+
+# Logs & OS noise
+*.log
+.DS_Store
+Thumbs.db
+
+# Editor (optional local)
+.idea/
