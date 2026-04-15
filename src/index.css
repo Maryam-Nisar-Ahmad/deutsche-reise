@@ -161,6 +161,16 @@
   text-decoration: underline dotted;
 }
 
+/* Story AI gloss: inflected form not matched to vault, but hover meaning from model */
+.word-glossed {
+  background: rgba(52, 211, 153, 0.12);
+  color: #6ee7b7;
+  border-radius: 3px;
+  padding: 1px 2px;
+  cursor: pointer;
+  border-bottom: 1px dotted rgba(110, 231, 183, 0.45);
+}
+
 .word-active {
   background: rgba(251, 191, 36, 0.3);
   color: #fbbf24;

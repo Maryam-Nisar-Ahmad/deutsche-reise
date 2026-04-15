@@ -5,7 +5,6 @@ import { reviewGermanProduction } from '../lib/deepseek'
 import { updateTodaySession, getTodaySession, addXP, getMasteredWordCount } from '../lib/db'
 import { getLevel } from '../lib/levelCalc'
 import { useStreak } from '../hooks/useStreak'
-import SessionTimer from '../components/shared/SessionTimer'
 import Button from '../components/shared/Button'
 import { showXPToast, showAppToast } from '../components/shared/XPToast'
 
@@ -104,7 +103,6 @@ export default function SpeakLab() {
 
   return (
     <>
-      <SessionTimer goalMinutes={25} label="Speak & Write" pageKey="speak" />
       <div className="max-w-2xl mx-auto space-y-6">
         <div className="card p-6">
           <div className="flex items-center gap-2 text-brand-400 mb-3">

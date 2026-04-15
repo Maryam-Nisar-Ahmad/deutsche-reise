@@ -1,8 +1,8 @@
-import { NavLink } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import {
   Home, CreditCard, BookOpen, Dumbbell, Library, Settings,
-  Flame, Zap, ChevronLeft, ChevronRight, Mic, ListOrdered, Target,
+  Flame, Zap, ChevronLeft, ChevronRight, Mic, ListOrdered,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { getCardStats, getTotalXP } from '../lib/db'
@@ -16,10 +16,11 @@ const navItems = [
   { path: '/grammar',   icon: Dumbbell,  label: 'Grammar Gym' },
   { path: '/speak',     icon: Mic,       label: 'Speak & Write' },
   { path: '/vocab',     icon: Library,   label: 'Vocab Vault' },
-  { path: '/placement', icon: Target,    label: 'SRS Placement' },
 ]
 
 export default function Sidebar({ wordCount, masteredCount = 0, onWidthChange }) {
+  const location = useLocation()
+  const navigate = useNavigate()
   const [collapsed, setCollapsed] = useState(false)
 
   useEffect(() => {
@@ -33,8 +34,8 @@ export default function Sidebar({ wordCount, masteredCount = 0, onWidthChange })
   const progress = getProgressToNextLevel(masteredCount)
 
   useEffect(() => {
-    getCardStats().then(s => setDueCount(s.due))
-  }, [])
+    getCardStats().then((s) => setDueCount(s.due))
+  }, [location.pathname])
 
   useEffect(() => {
     getTotalXP().then(setTotalXP)
@@ -87,6 +88,15 @@ export default function Sidebar({ wordCount, masteredCount = 0, onWidthChange })
             key={path}
             to={path}
             end={path === '/'}
+            onClick={(e) => {
+              if (e.defaultPrevented) return
+              if (e.button !== 0) return
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+              const t = e.currentTarget.getAttribute('target')
+              if (t && t !== '_self') return
+              e.preventDefault()
+              navigate(path)
+            }}
             className={({ isActive }) =>
               clsx(
                 'relative flex items-center gap-3 mx-2 px-3 py-2.5 rounded-xl mb-1 transition-all duration-150 text-sm font-medium',
@@ -133,6 +143,15 @@ export default function Sidebar({ wordCount, masteredCount = 0, onWidthChange })
       <div className="border-t border-surface-800 py-3">
         <NavLink
           to="/settings"
+          onClick={(e) => {
+            if (e.defaultPrevented) return
+            if (e.button !== 0) return
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+            const t = e.currentTarget.getAttribute('target')
+            if (t && t !== '_self') return
+            e.preventDefault()
+            navigate('/settings')
+          }}
           className={({ isActive }) =>
             clsx(
               'flex items-center gap-3 mx-2 px-3 py-2.5 rounded-xl transition-all text-sm font-medium',

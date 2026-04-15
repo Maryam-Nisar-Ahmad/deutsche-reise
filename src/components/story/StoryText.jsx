@@ -30,6 +30,8 @@ export default function StoryText({
   knownWords = new Set(),
   knownTranslations = new Map(),
   unknownMeanings = {},
+  /** normalizeGerman(surface) → short English (from AI), for inflected forms not in vault */
+  surfaceGlosses = {},
   activeWordIndex = -1,
   onWordClick,
 }) {
@@ -68,11 +70,10 @@ export default function StoryText({
         const isActive = td.wordIndex === activeWordIndex
         const known = td.isKnown
         const unknown = td.hasUnknownMeaning
+        const gloss = td.key && surfaceGlosses[td.key] ? surfaceGlosses[td.key] : undefined
         const tooltip = known
-          ? (knownTranslations.get(td.key) || 'In your vocabulary')
-          : unknown
-            ? unknownMeanings[td.key]
-            : undefined
+          ? (knownTranslations.get(td.key) || gloss || 'In your vocabulary')
+          : gloss || (unknown ? unknownMeanings[td.key] : undefined)
 
         return (
           <span
@@ -84,7 +85,8 @@ export default function StoryText({
               isActive && 'word-active',
               !isActive && known && 'word-known',
               !isActive && !known && unknown && 'word-unknown',
-              !isActive && !known && !unknown && 'word-plain hover:bg-white/10',
+              !isActive && !known && !unknown && gloss && 'word-glossed',
+              !isActive && !known && !unknown && !gloss && 'word-plain hover:bg-white/10',
             )}
           >
             {td.token}

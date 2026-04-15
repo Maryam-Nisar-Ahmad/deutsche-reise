@@ -3,20 +3,26 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowLeft, Plus, BookOpen, Trash2, ChevronDown, Eye, EyeOff, Loader2, RefreshCw,
-  Pickaxe, BarChart3,
+  BarChart3,
 } from 'lucide-react'
 import {
   getAllStories, saveStory, deleteStory, updateStoryProgress,
   getAllWords, updateTodaySession, getTodaySession, addXP, getStory, updateStoryRecord,
-  recordStoryChapterEncounters, mineChapterClozes,
+  recordStoryChapterEncounters,
 } from '../lib/db'
 import { estimateLexicalCoverage } from '../lib/storyMining'
-import { generateStory, explainUnknownWords } from '../lib/deepseek'
+import {
+  generateStory,
+  explainUnknownWords,
+  generateSurfaceGlossesForGermanText,
+  normalizeSurfaceGlosses,
+} from '../lib/deepseek'
 import { germanVoice } from '../lib/voice'
 import { useVoice } from '../hooks/useVoice'
 import { getSuggestedStoryLevelFromExposure } from '../lib/levelCalc'
 import { showXPToast, showAppToast } from '../components/shared/XPToast'
-import SessionTimer from '../components/shared/SessionTimer'
+import { unlockStoryReadyAudio, playStoryReadyChime } from '../lib/storyReadySound'
+import { shouldIgnoreGlobalKeydown } from '../lib/keyboardGuards'
 import { normalizeGerman } from '../lib/wordParser'
 import StoryText from '../components/story/StoryText'
 import AudioControls from '../components/story/AudioControls'
@@ -102,7 +108,6 @@ export default function StoryStudio() {
   const [wordCount, setWordCount] = useState(0)
   const [topicFilter, setTopicFilter] = useState('All')
   const [continueTopic, setContinueTopic] = useState(false)
-  const [mineBusy, setMineBusy] = useState(false)
 
   useEffect(() => {
     loadStories()
@@ -167,6 +172,7 @@ export default function StoryStudio() {
 
     setGenerating(true)
     setGenError('')
+    unlockStoryReadyAudio()
 
     try {
       const words = await getAllWords()
@@ -206,6 +212,13 @@ export default function StoryStudio() {
         } catch {}
       }
 
+      let surfaceGlosses = {}
+      try {
+        surfaceGlosses = await generateSurfaceGlossesForGermanText(allText)
+      } catch (e) {
+        console.warn('[StoryStudio] surface glosses', e)
+      }
+
       const storyId = await saveStory({
         title,
         theme: genTheme,
@@ -213,6 +226,7 @@ export default function StoryStudio() {
         content,
         chapters,
         wordMeanings: normalizeWordMeanings(meanings),
+        surfaceGlosses,
       })
 
       setGenerateModal(false)
@@ -221,6 +235,7 @@ export default function StoryStudio() {
 
       const saved = await getStory(storyId)
       if (saved) openStory(saved)
+      playStoryReadyChime()
     } catch (e) {
       setGenError(e.message === 'NO_API_KEY' ? 'Add API key in Settings' : `Error: ${e.message}`)
     }
@@ -295,6 +310,20 @@ export default function StoryStudio() {
     isPlayingRef.current = false
     setIsPlaying(false)
   }, [])
+
+  /** Space toggles chapter listen (same as main Play / Pause). Word popup and Shadow handle their own keys. */
+  useEffect(() => {
+    if (view !== 'reader' || !currentStory || shadowMode || activeWordPopup) return undefined
+    const onKey = (e) => {
+      if (e.code !== 'Space' && e.key !== ' ') return
+      if (shouldIgnoreGlobalKeydown(e)) return
+      e.preventDefault()
+      if (isPlaying) handlePause()
+      else handlePlay()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [view, currentStory, shadowMode, activeWordPopup, isPlaying, handlePlay, handlePause])
 
   const flushChapterEncounters = async () => {
     if (!currentStory) return
@@ -411,25 +440,6 @@ export default function StoryStudio() {
       showAppToast(e.message === 'NO_API_KEY' ? 'Add API key in Settings' : `Regenerate failed: ${e.message}`)
     }
     setRegenLoadingId(null)
-  }
-
-  const handleMineClozes = async () => {
-    const ch = currentStory?.chapters?.[currentChapterIdx]
-    if (!currentStory || !ch) return
-    setMineBusy(true)
-    try {
-      const body = ch.text.replace(/^Kapitel[^\n]+\n?/i, '')
-      const n = await mineChapterClozes(currentStory.id, ch.title, body, 8)
-      await loadKnownWords()
-      showAppToast(
-        n > 0
-          ? `Mined ${n} cloze ${n === 1 ? 'card' : 'cards'} — they appear in Flashcards.`
-          : 'No new cloze cards. Add words to your vault or try another chapter.'
-      )
-    } catch (e) {
-      showAppToast(`Mining failed: ${e.message}`)
-    }
-    setMineBusy(false)
   }
 
   const readerChapter = view === 'reader' && currentStory
@@ -686,19 +696,6 @@ export default function StoryStudio() {
   const chapter = currentStory.chapters[currentChapterIdx]
   const sentences = chapter ? germanVoice.getSentences(chapter.text) : []
 
-  const storyPageKey =
-    storyTimerMode === 'read' ? 'story_read' :
-    storyTimerMode === 'listen' ? 'story_listen' :
-    'story_shadow'
-  const storyGoalMinutes =
-    storyTimerMode === 'read' ? 30 :
-    storyTimerMode === 'listen' ? 25 :
-    15
-  const storyTimerLabel =
-    storyTimerMode === 'read' ? 'Read' :
-    storyTimerMode === 'listen' ? 'Listen' :
-    'Shadow Mode'
-
   return (
     <div className="max-w-3xl mx-auto pb-32">
       {/* Top bar */}
@@ -769,27 +766,12 @@ export default function StoryStudio() {
             )}
           </div>
 
-          <div className="flex flex-wrap gap-2 mb-4">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={mineBusy}
-              onClick={handleMineClozes}
-              icon={mineBusy ? <Loader2 size={14} className="animate-spin" /> : <Pickaxe size={14} />}
-            >
-              {mineBusy ? 'Mining…' : 'Mine cloze cards'}
-            </Button>
-            <span className="text-[11px] text-slate-500 self-center">
-              Sentence cards for Flashcards (from this chapter)
-            </span>
-          </div>
-
           <StoryText
             text={chapter.text.replace(/^Kapitel[^\n]+\n?/i, '')}
             knownWords={knownWordsSet}
             knownTranslations={knownWordMap}
             unknownMeanings={wordMeanings}
+            surfaceGlosses={normalizeSurfaceGlosses(currentStory.surfaceGlosses || {})}
             onWordClick={handleWordClick}
           />
 
@@ -859,13 +841,6 @@ export default function StoryStudio() {
         onVoiceChange={changeVoice}
         shadowMode={shadowMode}
         onToggleShadow={handleToggleShadow}
-      />
-
-      <SessionTimer
-        key={storyPageKey}
-        goalMinutes={storyGoalMinutes}
-        label={storyTimerLabel}
-        pageKey={storyPageKey}
       />
 
       {/* Shadow mode overlay */}

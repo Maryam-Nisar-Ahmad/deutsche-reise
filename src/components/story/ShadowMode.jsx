@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Play, Mic, ChevronRight, X, Eye, EyeOff } from 'lucide-react'
 import { germanVoice } from '../../lib/voice'
+import { shouldIgnoreGlobalKeydown } from '../../lib/keyboardGuards'
 
 /**
  * Shadowing: listen then repeat. Research often contrasts "blind" (no text while listening)
@@ -66,12 +67,25 @@ export default function ShadowMode({ sentences, onClose, onChapterComplete }) {
     }, 50)
   }
 
+  /** Space advances to the next sentence (same as “Next” / skip flow). */
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.code !== 'Space' && e.key !== ' ') return
+      if (shouldIgnoreGlobalKeydown(e)) return
+      if (phase === 'done') return
+      e.preventDefault()
+      goNext()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [phase, goNext])
+
   const current = sentences[currentIdx]
   const total = sentences.length
   const showSentenceText = !blindListen || phase === 'repeat'
 
   return (
-    <div className="fixed inset-0 z-40 bg-surface-950/98 flex flex-col">
+    <div className="fixed inset-0 z-40 flex flex-col bg-black/75 backdrop-blur-xl supports-[backdrop-filter]:bg-black/55">
       <div className="flex items-center justify-between px-6 py-4 border-b border-surface-800">
         <div className="flex items-center gap-2">
           <Mic size={18} className="text-orange-400" />

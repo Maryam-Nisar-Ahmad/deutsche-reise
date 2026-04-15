@@ -14,9 +14,9 @@ import { showAppToast } from '../components/shared/XPToast'
 import { parseDuolingoFormat, parseManualEntry, prepareGroupedImportRules } from '../lib/wordParser'
 import { prepareGroupedImport } from '../lib/wordGrouper'
 import { germanVoice } from '../lib/voice'
+import { shouldIgnoreGlobalKeydown } from '../lib/keyboardGuards'
 import Button from '../components/shared/Button'
 import Modal from '../components/shared/Modal'
-import SessionTimer from '../components/shared/SessionTimer'
 
 const FILTERS = ['All', 'New', 'Learning', 'Mastered', 'Due Today']
 
@@ -67,6 +67,7 @@ export default function VocabVault() {
   const [practiceSentence, setPracticeSentence] = useState('')
   const [practiceBusy, setPracticeBusy] = useState(false)
   const fileRef = useRef(null)
+  const vaultListAudioIdxRef = useRef(0)
   const [bundledBaseline, setBundledBaseline] = useState(null)
 
   useEffect(() => {
@@ -131,6 +132,38 @@ export default function VocabVault() {
       newCards: all.filter(c => c.state === 'new').length,
     }
   }, [words, cards])
+
+  const freqOrStoryVaultCount = useMemo(
+    () =>
+      words.filter(
+        (w) =>
+          w.learnSource === 'frequency' ||
+          w.source === 'frequency' ||
+          w.learnSource === 'story' ||
+          w.source === 'story'
+      ).length,
+    [words]
+  )
+
+  useEffect(() => {
+    vaultListAudioIdxRef.current = 0
+  }, [filtered])
+
+  useEffect(() => {
+    if (deleteConfirm || practiceWord) return undefined
+    const onKey = (e) => {
+      if (e.key !== 'ArrowLeft') return
+      if (shouldIgnoreGlobalKeydown(e)) return
+      if (!filtered.length) return
+      e.preventDefault()
+      const w = filtered[vaultListAudioIdxRef.current % filtered.length]
+      vaultListAudioIdxRef.current += 1
+      const g = String(w?.german || '').trim()
+      if (g) germanVoice.speakWord(g)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [deleteConfirm, practiceWord, filtered])
 
   const handleFixEnDeSwap = async () => {
     setFixSwapBusy(true)
@@ -353,7 +386,6 @@ export default function VocabVault() {
 
   return (
     <>
-    <SessionTimer goalMinutes={10} label="Vocab Vault" pageKey="vocab" />
     <div className="max-w-5xl mx-auto space-y-5">
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -617,14 +649,20 @@ export default function VocabVault() {
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         {[
           { label: 'Total', value: words.length, color: 'text-white' },
           { label: 'Mastered', value: stats.mastered, color: 'text-green-400' },
           { label: 'Learning', value: stats.learning, color: 'text-yellow-400' },
           { label: 'New', value: stats.newCards, color: 'text-blue-400' },
+          {
+            label: 'Freq + Story',
+            value: freqOrStoryVaultCount,
+            color: 'text-violet-300',
+            hint: 'From Frequency Lab or Story Studio',
+          },
         ].map(s => (
-          <div key={s.label} className="card p-3 text-center">
+          <div key={s.label} className="card p-3 text-center" title={s.hint}>
             <div className={`text-xl font-bold ${s.color}`}>{s.value.toLocaleString()}</div>
             <div className="text-xs text-slate-500">{s.label}</div>
           </div>
@@ -665,7 +703,15 @@ export default function VocabVault() {
           {filtered.length.toLocaleString()} {filtered.length === 1 ? 'word' : 'words'}
           {search || activeFilter !== 'All' ? ` (filtered from ${words.length.toLocaleString()})` : ''}
           {!search && activeFilter === 'All' && words.length > 0 && (
-            <span className="text-slate-600"> · newest at top</span>
+            <>
+              <span className="text-slate-600"> · newest at top</span>
+              {freqOrStoryVaultCount > 0 && (
+                <span className="text-slate-600">
+                  {' '}
+                  · {freqOrStoryVaultCount.toLocaleString()} from Frequency Lab + Story Studio
+                </span>
+              )}
+            </>
           )}
         </p>
         <div className="flex gap-2">
@@ -741,14 +787,8 @@ export default function VocabVault() {
                     </div>
                   </div>
 
-                  {/* Encounters & cloze (research: multiple exposures) */}
                   <div className="hidden sm:flex flex-col items-end text-[10px] text-slate-500 shrink-0 w-14">
                     <span title="Times seen in story chapters">{word.encounterCount || 0}×</span>
-                    {(word.storyClozes?.length || 0) > 0 && (
-                      <span className="text-brand-400/90" title="Cloze cards from stories">
-                        {word.storyClozes.length} cloze
-                      </span>
-                    )}
                   </div>
 
                   {/* SRS bar */}

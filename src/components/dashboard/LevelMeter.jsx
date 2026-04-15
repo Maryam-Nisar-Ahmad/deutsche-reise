@@ -35,9 +35,12 @@ export default function LevelMeter({ masteredCount, vocabularyExposure }) {
           <span className="text-2xl font-bold text-white tabular-nums">
             {masteredCount.toLocaleString()}
           </span>
-          <span className="text-sm text-slate-400">mastered words</span>
+          <span className="text-sm text-slate-400">firm mastered (FSRS)</span>
         </div>
         <p className="text-xs text-slate-500">
+          Words that reached review with enough spacing — not a single lucky recall.
+        </p>
+        <p className="text-xs text-slate-500 mt-1">
           <span className="text-slate-400 tabular-nums">{vocabularyExposure.toLocaleString()}</span>
           {' '}vocabulary exposure <span className="text-slate-600">(imported deck)</span>
         </p>

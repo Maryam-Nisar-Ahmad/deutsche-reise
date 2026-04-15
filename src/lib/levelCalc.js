@@ -1,4 +1,4 @@
-// CEFR bands keyed to SRS-mastered word count (state === 'review')
+// CEFR bands keyed to firm FSRS mastery (stable + enough reviews — see getMasteredWordCount / isFirmMasteredRow)
 const LEVEL_THRESHOLDS = [
   { min: 0,      max: 499,    level: 'A1',  label: 'Beginner',           color: '#ef4444' },
   { min: 500,    max: 1199,   level: 'A2',  label: 'Elementary',         color: '#f97316' },

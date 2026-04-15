@@ -8,7 +8,8 @@
     "build:baseline": "node scripts/build-baseline-words.mjs",
     "build:frequency": "node scripts/build-frequency-data.mjs",
     "build": "node scripts/build-baseline-words.mjs && node scripts/build-frequency-data.mjs && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify": "node scripts/verify-fsrs.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -17,7 +18,8 @@
     "lucide-react": "^0.460.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.30.3"
+    "react-router-dom": "^6.30.3",
+    "ts-fsrs": "^5.3.2"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",

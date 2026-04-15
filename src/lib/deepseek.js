@@ -1,3 +1,5 @@
+import { vaultContainsGermanLexeme, normalizeGerman } from './wordParser.js'
+
 const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions'
 const MODEL = 'deepseek-chat'
 
@@ -207,24 +209,84 @@ Return format: {"word1": "meaning", "word2": "meaning"}`
   }
 }
 
+/** Normalize AI token→gloss keys to normalizeGerman for StoryText lookup. */
+export function normalizeSurfaceGlosses(raw) {
+  if (!raw || typeof raw !== 'object') return {}
+  const out = {}
+  for (const [k, v] of Object.entries(raw)) {
+    const nk = normalizeGerman(String(k || '').trim())
+    if (!nk) continue
+    const s = String(v ?? '').trim()
+    if (!s) continue
+    out[nk] = s.slice(0, 120)
+  }
+  return out
+}
+
+const GLOSS_SKIP = new Set([
+  'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einer', 'einem', 'einen', 'und', 'oder', 'aber',
+  'nicht', 'sie', 'er', 'es', 'wir', 'ihr', 'mit', 'von', 'zu', 'auf', 'in', 'an', 'ist', 'sind', 'war', 'wurde',
+  'hat', 'haben', 'für', 'auch', 'noch', 'nur', 'wie', 'was', 'wenn', 'dann', 'da', 'hier', 'aus', 'bei', 'nach',
+  'über', 'um', 'als', 'man', 'sich', 'im', 'am', 'vom', 'zum', 'zur',
+])
+
+/**
+ * Second-pass glosses for surface forms in learner story prose (inflections not in vault).
+ * Keys in returned object are normalizeGerman(token).
+ */
+export async function generateSurfaceGlossesForGermanText(germanText) {
+  const body = String(germanText || '').slice(0, 14000)
+  const tokens = [...new Set(body.toLowerCase().match(/[a-zäöüß]+/gi) || [])].filter(
+    (t) => t.length > 2 && !GLOSS_SKIP.has(t)
+  )
+  const filtered = tokens.slice(0, 200)
+  if (!filtered.length) return {}
+
+  const userPrompt = `German learner story prose will contain these word FORMS (verbs/adjectives/nouns as spelled, including inflections):
+
+${filtered.join(', ')}
+
+Return ONLY valid JSON: one object whose keys are EXACTLY those strings from the list (same spelling as listed) and values are very short English meanings (1–7 words) for that surface form in typical prose.
+
+Cover as many as you can (aim for ≥80%). Skip only if unsure. For clear proper names you may use "name".
+
+Example: {"geht":"goes; is going","Berge":"mountains"}
+
+No markdown, no code fences — JSON only.`
+
+  const result = await invokeDeepSeek({ userPrompt, temperature: 0.12, maxTokens: 3200 })
+  let text = String(result || '').trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '')
+  const first = text.indexOf('{')
+  const last = text.lastIndexOf('}')
+  if (first >= 0 && last > first) text = text.slice(first, last + 1)
+  try {
+    const parsed = JSON.parse(text)
+    return normalizeSurfaceGlosses(parsed)
+  } catch {
+    return {}
+  }
+}
+
 export async function explainWord(germanWord, context, userVocabSample) {
   const userPrompt = `Explain the German word "${germanWord}" to a B1-level learner.
 
 Context sentence: "${context || 'none'}"
 
-Provide ALL of the following, clearly labeled:
+Provide ALL of the following, clearly labeled (exact labels, one line each to start a block):
 GERMAN: ${germanWord}
-GENDER & PLURAL: (if noun — der/die/das, plural form)
+GENDER & PLURAL: (if noun — der/die/das, plural form; if not a noun, say so briefly)
 MEANING: (English translation, 1-3 words)
-FULL MEANING: (2-3 sentence English explanation of nuance, usage, common contexts)
-EXAMPLE 1: (German sentence using this word — B1 level)
-EXAMPLE 2: (Different German sentence, different context)
+FULL MEANING: (2-4 sentence English explanation of nuance, usage, register, common contexts)
+EXAMPLE 1 DE: (German sentence using this word — B1 level)
+EXAMPLE 1 EN: (Accurate English translation of EXAMPLE 1 DE only — full sentence)
+EXAMPLE 2 DE: (Different German sentence, different context)
+EXAMPLE 2 EN: (Accurate English translation of EXAMPLE 2 DE only — full sentence)
 MEMORY TIP: (One vivid mnemonic or association to remember this word)
 RELATED WORDS: (2-3 related German words or common phrases)
 
-Write clearly and helpfully. No extra formatting symbols.`
+Every EXAMPLE * EN line MUST be present and MUST translate only its matching DE line. No extra formatting symbols.`
 
-  const raw = await invokeDeepSeek({ userPrompt, temperature: 0.3, maxTokens: 600 })
+  const raw = await invokeDeepSeek({ userPrompt, temperature: 0.3, maxTokens: 900 })
   return cleanMarkdown(raw)
 }
 
@@ -471,13 +533,15 @@ Use mostly words from this KNOWN list for all German sentences and the story (co
 ${known}
 
 Rules:
-- 4 short German example sentences using the target word (different contexts). Each with accurate English translation.
+- "fullMeaning": 2-4 sentences in English only — nuance, usage, register, collocations (like a good dictionary usage note; not a repeat of glossShort only).
+- 4 short German example sentences using the target word (different contexts). Each object MUST include a non-empty accurate English "en" translation.
 - One German mini-story (70–110 words) that uses the target word at least twice and otherwise prefers the known list.
 - Plain style, no markdown in German fields.
 
 Return ONLY valid JSON:
 {
   "glossShort": "English gloss, max 14 words",
+  "fullMeaning": "English only, 2-4 sentences",
   "sentences": [{"de":"German sentence","en":"English translation"}],
   "storyDe": "German story only",
   "storyEn": "English summary of the story"
@@ -487,7 +551,7 @@ Return ONLY valid JSON:
     systemPrompt: 'You return only valid JSON. Escape any double quotes inside German strings with backslash. No markdown.',
     userPrompt,
     temperature: 0.45,
-    maxTokens: 2500,
+    maxTokens: 2800,
   })
   let text = String(result || '').trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '')
   const first = text.indexOf('{')
@@ -505,7 +569,219 @@ Return ONLY valid JSON:
     throw new Error('AI returned JSON but no story. Try "AI: story + extra sentences" again.')
   }
   if (!Array.isArray(parsed.sentences)) parsed.sentences = []
+  if (typeof parsed.fullMeaning !== 'string') parsed.fullMeaning = ''
   return parsed
+}
+
+/**
+ * Story Studio: compare clicked token to full vault (lemmas / variants), not naive string equality.
+ * @param {{ surfaceWord: string, storyContext?: string, vaultWords: Array<{german?: string, translation?: string, variants?: string[]}> }} params
+ * @returns {Promise<{ duplicate: boolean, lemma: string, glossShort?: string, matchedLine?: string, reason?: string }>}
+ */
+export async function checkStoryWordVaultDuplicate({ surfaceWord, storyContext, vaultWords }) {
+  const vaultLines = (vaultWords || []).slice(0, 800).map((w, i) => {
+    const vars = (w.variants || []).filter(Boolean).slice(0, 6).join('; ')
+    return `${i + 1}. ${w.german} — ${String(w.translation || '').slice(0, 60)}${vars ? ` | variants: ${vars}` : ''}`
+  }).join('\n')
+
+  const userPrompt = `You are a German linguist. The learner's vocabulary vault is below (one lemma/gloss per line; optional inflected variants).
+
+The learner selected this German token in a story (may be inflected, part of a compound, separable verb particle, etc.):
+"${String(surfaceWord || '').trim()}"
+
+Context where it appeared (German):
+${String(storyContext || '').trim().slice(0, 900)}
+
+Decide if this token is ALREADY covered by the vault (same lexeme/lemma/family: e.g. vault has "gehen" and token is "ging", or vault has pronoun lemma and token matches that family).
+
+CRITICAL: Set "duplicate" to true ONLY if one of the numbered vault lines explicitly lists that coverage (the headword, a variant after "variants:", or the exact surface token as the headword). If no numbered line applies, "duplicate" MUST be false. Never infer from world knowledge outside this list.
+
+Return ONLY valid JSON, no markdown:
+{"duplicate":true|false,"lemma":"if duplicate false: best dictionary headword for a flashcard (German); if duplicate true: same lemma as matched vault entry","glossShort":"if duplicate false: one-line English gloss (~14 words max); if duplicate true can be empty","matchedLine":"if duplicate: short quote of which vault line matched (max 80 chars); else empty string","reason":"max 18 words"}`
+
+  const result = await invokeDeepSeek({
+    systemPrompt: 'You return only valid JSON. No markdown fences.',
+    userPrompt,
+    temperature: 0.05,
+    maxTokens: 700,
+  })
+  try {
+    let text = String(result || '').trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '')
+    const first = text.indexOf('{')
+    const last = text.lastIndexOf('}')
+    if (first >= 0 && last > first) text = text.slice(first, last + 1)
+    const parsed = JSON.parse(text)
+    const lemma = String(parsed.lemma || surfaceWord || '')
+      .trim()
+      .replace(/\s+/g, ' ')
+    let duplicate = !!parsed.duplicate
+    if (duplicate) {
+      const vault = Array.isArray(vaultWords) ? vaultWords : []
+      const verified =
+        vaultContainsGermanLexeme(vault, lemma) || vaultContainsGermanLexeme(vault, surfaceWord)
+      if (!verified) {
+        duplicate = false
+      }
+    }
+    return {
+      duplicate,
+      lemma: lemma || String(surfaceWord || '').trim(),
+      glossShort: String(parsed.glossShort || '').trim(),
+      matchedLine: String(parsed.matchedLine || '').trim(),
+      reason: String(parsed.reason || '').trim(),
+    }
+  } catch (e) {
+    throw new Error(`Could not parse vault duplicate check: ${e?.message || 'invalid JSON'}`)
+  }
+}
+
+/**
+ * Micro-lesson for a lemma saved from Story Studio (same JSON shape as Frequency Lab lessons).
+ */
+export async function generateStoryStudioWordLesson({
+  lemma,
+  surfaceForm,
+  storyContext,
+  knownGermanWords,
+  cefrHint = 'A2',
+}) {
+  const known = shuffleArray(knownGermanWords || [])
+    .slice(0, 120)
+    .join(', ')
+
+  const userPrompt = `Create a micro-lesson for a German learner (goal B2 in 7 months). CEFR about ${cefrHint}.
+
+Lemma (dictionary form for the flashcard): "${String(lemma || '').trim()}"
+Surface form the learner tapped: "${String(surfaceForm || '').trim()}"
+Story context (where it appeared):
+${String(storyContext || '').trim().slice(0, 650)}
+
+Use mostly words from this KNOWN list for all German sentences and the story (comprehensible input / i+1):
+${known}
+
+Rules:
+- "fullMeaning": 2-4 sentences in English only — nuance, usage, register (same depth as a dictionary usage note).
+- 4 short German example sentences using the lemma (natural inflections allowed). Each object MUST include a non-empty accurate English "en" translation.
+- One German mini-story (70–110 words) that uses the lemma at least twice and otherwise prefers the known list.
+- "variants": optional array of up to 6 strings — common inflected forms or close collocations worth linking to this lemma for flashcard context matching (no duplicates of the lemma itself).
+- Plain style, no markdown in German fields.
+
+Return ONLY valid JSON:
+{
+  "glossShort": "English gloss, max 14 words",
+  "fullMeaning": "English only, 2-4 sentences",
+  "variants": ["optional"],
+  "sentences": [{"de":"German sentence","en":"English translation"}],
+  "storyDe": "German story only",
+  "storyEn": "English summary of the story"
+}`
+
+  const result = await invokeDeepSeek({
+    systemPrompt: 'You return only valid JSON. Escape any double quotes inside German strings with backslash. No markdown.',
+    userPrompt,
+    temperature: 0.45,
+    maxTokens: 2700,
+  })
+  let text = String(result || '').trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '')
+  const first = text.indexOf('{')
+  const last = text.lastIndexOf('}')
+  if (first >= 0 && last > first) text = text.slice(first, last + 1)
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch (e) {
+    throw new Error(
+      `AI lesson JSON parse failed (${e?.message || 'parse error'}). Try again, or shorten your vault / check API quota.`
+    )
+  }
+  if (!parsed || typeof parsed.storyDe !== 'string' || !parsed.storyDe.trim()) {
+    throw new Error('AI returned JSON but no story. Try saving again.')
+  }
+  if (!Array.isArray(parsed.sentences)) parsed.sentences = []
+  if (!Array.isArray(parsed.variants)) parsed.variants = []
+  if (typeof parsed.fullMeaning !== 'string') parsed.fullMeaning = ''
+  return parsed
+}
+
+/**
+ * One German mini-story for Frequency Lab review: centers recently added lemmas while using
+ * high-frequency lemmas from the same list as scaffolding (comprehensible input, rank-aware).
+ * Separate from Story Studio's open-ended generator.
+ *
+ * @param {object} options
+ * @param {{ german: string, translation?: string, frequencyRank: number }[]} options.focusWords
+ * @param {{ german: string, translation?: string, frequencyRank: number }[]} options.glueWords
+ * @param {string} [options.cefrHint]
+ * @param {number} [options.totalFrequencyWords] total count from Frequency Lab (context only)
+ */
+export async function generateFrequencyLabConsolidationStory({
+  focusWords,
+  glueWords,
+  cefrHint = 'A2',
+  totalFrequencyWords = 0,
+}) {
+  const fmt = (w) =>
+    `rank ${Number.isFinite(w.frequencyRank) ? w.frequencyRank : '—'}: ${w.german} (${String(w.translation || '').slice(0, 72) || 'no gloss'})`
+
+  const focusBlock = (focusWords || []).map(fmt).join('\n')
+  const glueBlock = (glueWords || []).map(fmt).join('\n')
+
+  const userPrompt = `You write German for a learner targeting B2 in ~7 months. CEFR band about ${cefrHint}.
+
+This is a **consolidation / review** story: NOT a vocabulary test and NOT a list of unrelated sentences.
+The learner has added ${totalFrequencyWords || (focusWords?.length || 0) + (glueWords?.length || 0)} words from a frequency-ranked corpus (lower rank = more common in real German).
+
+=== FOCUS WORDS (recently added — give these the narrative spotlight) ===
+Each must appear at least once in natural German. Prefer using a few of them twice if it reads naturally (extra retrieval practice).
+${focusBlock || '(none)'}
+
+=== GLUE / SCAFFOLD (high-frequency items from the same learner list — use liberally for comprehensible input) ===
+Prefer these over introducing brand-new vocabulary. Lower rank = more common = better as sentence glue.
+${glueBlock || '(none — rely on focus words only)'}
+
+Pedagogy (follow strictly):
+- **Comprehensible input (Krashen-style):** ~90%+ of content words should come from the two lists above. Minimal "unknown" words; no English in the German story.
+- **i+1:** Keep grammar mostly at or slightly below ${cefrHint}; avoid experimental literary style.
+- **Coherent mini-narrative:** one clear situation, 130–200 German words, past or present consistent, natural dialogue allowed briefly.
+- **Rank-aware:** common words (low rank) should carry function and fluency; focus words drive the plot or key details.
+- **Do not** force every glue word into one paragraph in an artificial way; use what the story needs for smooth German.
+
+Return ONLY valid JSON:
+{
+  "storyDe": "German story only, plain text, no markdown",
+  "storyEn": "2–4 sentence English summary of the same story",
+  "titleDe": "Optional 2–5 word German title or empty string",
+  "tokenGlosses": { "winkt": "waves", "Berge": "mountains" }
+}
+
+Also include "tokenGlosses": an object mapping many German word FORMS that actually appear inside storyDe (same spelling as in the story for each key) to very short English glosses (1–7 words). Include inflected verbs, cases, plurals, etc., so a reader can hover any form. Aim for at least 25 entries when the story is long enough. Keys must match substrings/word tokens from storyDe (letters only, as written).`
+
+  const result = await invokeDeepSeek({
+    systemPrompt:
+      'You return only valid JSON. Escape double quotes inside German strings. No markdown fences in the JSON.',
+    userPrompt,
+    temperature: 0.42,
+    maxTokens: 3800,
+  })
+  let text = String(result || '').trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '')
+  const first = text.indexOf('{')
+  const last = text.lastIndexOf('}')
+  if (first >= 0 && last > first) text = text.slice(first, last + 1)
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch (e) {
+    throw new Error(`Consolidation story JSON parse failed (${e?.message || 'parse error'}). Try again.`)
+  }
+  if (!parsed || typeof parsed.storyDe !== 'string' || !parsed.storyDe.trim()) {
+    throw new Error('AI returned no German story. Try again.')
+  }
+  return {
+    storyDe: parsed.storyDe.trim(),
+    storyEn: String(parsed.storyEn || '').trim(),
+    titleDe: String(parsed.titleDe || '').trim(),
+    tokenGlosses: normalizeSurfaceGlosses(parsed.tokenGlosses),
+  }
 }
 
 export async function testConnection() {

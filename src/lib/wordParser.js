@@ -2,6 +2,84 @@ export function normalizeGerman(word) {
   return word.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
+export function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * True if German text contains `surface` as a whole word/phrase (Unicode letters as word chars).
+ * Avoids showing Frequency Lab sentences that only use a related form (e.g. "mich" when the card is "sich").
+ */
+export function germanTextContainsSurface(text, surface) {
+  const s = String(surface || '').trim()
+  const t = String(text || '').trim()
+  if (!s || !t) return false
+  const re = new RegExp(`(^|[^\\p{L}])${escapeRegExp(s)}([^\\p{L}]|$)`, 'iu')
+  return re.test(t)
+}
+
+/** Any of the given surfaces (lemma + variants) appears in the German sentence. */
+export function germanTextContainsAnySurface(text, surfaces) {
+  const list = [...new Set((surfaces || []).map((x) => String(x || '').trim()).filter(Boolean))]
+  for (const surf of list) {
+    if (germanTextContainsSurface(text, surf)) return true
+  }
+  return false
+}
+
+/**
+ * True if `query` matches this saved word's headword, normalizedKey, or any listed variant (exact normalized equality).
+ * Used to verify AI "already in vault" claims against IndexedDB only — not the frequency corpus.
+ */
+export function vaultRowMatchesGermanSurface(wordRow, query) {
+  const q = normalizeGerman(String(query || ''))
+  if (!q) return false
+  const g = normalizeGerman(String(wordRow?.german || ''))
+  if (g && g === q) return true
+  const nk = normalizeGerman(String(wordRow?.normalizedKey || ''))
+  if (nk && nk === q) return true
+  for (const v of Array.isArray(wordRow?.variants) ? wordRow.variants : []) {
+    if (normalizeGerman(String(v || '')) === q) return true
+  }
+  return false
+}
+
+/** True if any saved word row matches the German string as lemma, key, or variant. */
+export function vaultContainsGermanLexeme(vaultWords, lemmaOrSurface) {
+  const s = String(lemmaOrSurface || '').trim()
+  if (!s) return false
+  for (const w of Array.isArray(vaultWords) ? vaultWords : []) {
+    if (vaultRowMatchesGermanSurface(w, s)) return true
+  }
+  return false
+}
+
+/**
+ * Parsed fields from Story Studio `explainWord` output (EXAMPLE n DE/EN or legacy EXAMPLE n).
+ * @returns {Array<{ de: string, en: string }>}
+ */
+export function storyExplainExamplePairs(parsed) {
+  if (!parsed || typeof parsed !== 'object') return []
+  const de1 = String(parsed['EXAMPLE 1 DE'] || parsed['EXAMPLE 1'] || '').trim()
+  const en1 = String(parsed['EXAMPLE 1 EN'] || '').trim()
+  const de2 = String(parsed['EXAMPLE 2 DE'] || parsed['EXAMPLE 2'] || '').trim()
+  const en2 = String(parsed['EXAMPLE 2 EN'] || '').trim()
+  const out = []
+  if (de1) out.push({ de: de1, en: en1 })
+  if (de2) out.push({ de: de2, en: en2 })
+  return out
+}
+
+/** Ordered German lines for keyboard TTS: examples then story context snippet. */
+export function storyPopupGermanAudioPlaylist(parsed, context) {
+  const lines = storyExplainExamplePairs(parsed)
+    .map((p) => p.de)
+    .filter(Boolean)
+  const ctx = String(context || '').trim()
+  if (ctx) lines.push(ctx)
+  return lines
+}
+
 /** Duolingo (EN→DE) exports often put English on line 1 and German on line 2 — detect and orient. */
 const DE_HINT_RE = /\b(der|die|das|und|ich|du|er|sie|es|wir|ihr|nicht|ein|eine|einen|einem|zum|zur|ist|sind|bin|bist|hat|haben|war|wurde|wenn|dass|auch|nur|noch|schon|immer|mit|auf|für|aus|bei|nach|von|zu|wie|was|wo|oder|aber|dann|hier|da|mir|dir|mich|dich|euch|uns|ihnen|ihm|ihr)\b/i
 

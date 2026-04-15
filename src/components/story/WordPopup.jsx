@@ -1,24 +1,30 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Volume2, X, Heart, Check, Loader2 } from 'lucide-react'
 import { germanVoice } from '../../lib/voice'
-import { explainWord } from '../../lib/deepseek'
-import { addWord, getAllWords } from '../../lib/db'
+import { explainWord, checkStoryWordVaultDuplicate, generateStoryStudioWordLesson } from '../../lib/deepseek'
+import { addWordFromStory, getAllWords } from '../../lib/db'
+import { normalizeGerman, storyExplainExamplePairs, storyPopupGermanAudioPlaylist } from '../../lib/wordParser'
 import { showAppToast } from '../shared/XPToast'
+import { shouldIgnoreGlobalKeydown } from '../../lib/keyboardGuards'
 
 function parseExplanation(text) {
   if (!text) return {}
   const result = {}
   const lines = text.split('\n')
   let currentKey = null
-  let currentVal = []
+  const currentVal = []
+
+  const labelRe =
+    /^(GERMAN|GENDER & PLURAL|MEANING|FULL MEANING|EXAMPLE 1 DE|EXAMPLE 1 EN|EXAMPLE 2 DE|EXAMPLE 2 EN|EXAMPLE 1|EXAMPLE 2|MEMORY TIP|RELATED WORDS):\s*(.*)/
 
   for (const line of lines) {
-    const match = line.match(/^(GERMAN|GENDER & PLURAL|MEANING|FULL MEANING|EXAMPLE 1|EXAMPLE 2|MEMORY TIP|RELATED WORDS):\s*(.*)/)
+    const match = line.match(labelRe)
     if (match) {
       if (currentKey) result[currentKey] = currentVal.join(' ').trim()
       currentKey = match[1]
-      currentVal = match[2] ? [match[2]] : []
+      currentVal.length = 0
+      if (match[2]) currentVal.push(match[2])
     } else if (currentKey && line.trim()) {
       currentVal.push(line.trim())
     }
@@ -33,44 +39,147 @@ export default function WordPopup({ word, context, onClose, onSaved }) {
   const [error, setError] = useState(null)
   const [saved, setSaved] = useState(false)
   const [checkingSaved, setCheckingSaved] = useState(true)
+  const [saveBusy, setSaveBusy] = useState(false)
+  const leftExampleIdxRef = useRef(0)
 
   useEffect(() => {
-    // Check if word is already in deck
     const check = async () => {
       const words = await getAllWords()
-      const normalized = word.toLowerCase().trim()
-      const exists = words.some(w => w.normalizedKey === normalized || w.german.toLowerCase() === normalized)
+      const key = normalizeGerman(word)
+      const exists = words.some((w) => w.normalizedKey === key)
       setSaved(exists)
       setCheckingSaved(false)
     }
     check()
 
-    // Fetch explanation
     const apiKey = localStorage.getItem('dr_api_key')
     if (apiKey) {
       setLoading(true)
       explainWord(word, context)
-        .then(text => {
+        .then((text) => {
           setExplanation(parseExplanation(text))
           setLoading(false)
         })
-        .catch(e => {
+        .catch((e) => {
           setError(e.message === 'NO_API_KEY' ? 'Add API key in Settings' : 'Could not load explanation')
           setLoading(false)
         })
     }
   }, [word, context])
 
+  useEffect(() => {
+    leftExampleIdxRef.current = 0
+  }, [word, context, explanation])
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (shouldIgnoreGlobalKeydown(e)) return
+
+      if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault()
+        e.stopPropagation()
+        if (germanVoice.isSpeaking()) {
+          germanVoice.stop()
+        } else {
+          germanVoice.speakWord(word)
+        }
+        return
+      }
+
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        e.stopPropagation()
+        const playlist = storyPopupGermanAudioPlaylist(explanation || {}, context)
+        if (!playlist.length) return
+        const line = playlist[leftExampleIdxRef.current % playlist.length]
+        leftExampleIdxRef.current += 1
+        germanVoice.speakSentence(line)
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [word, context, explanation])
+
   const handleSave = async () => {
-    if (saved) return
-    const meaning = explanation?.MEANING || context || word
-    await addWord(word, meaning)
-    setSaved(true)
-    onSaved?.()
-    showAppToast('Saved to Vocab Vault — newest words appear at the top of the list.')
+    if (saved || saveBusy) return
+    const apiKey = localStorage.getItem('dr_api_key')
+    if (!apiKey?.trim()) {
+      showAppToast('Add your DeepSeek API key in Settings. Saving uses AI to match your vault and build examples.')
+      return
+    }
+    setSaveBusy(true)
+    try {
+      const vault = await getAllWords()
+      const dupCheck = await checkStoryWordVaultDuplicate({
+        surfaceWord: word,
+        storyContext: context,
+        vaultWords: vault,
+      })
+      if (dupCheck.duplicate) {
+        const hint = dupCheck.matchedLine || dupCheck.reason || dupCheck.lemma
+        showAppToast(
+          hint
+            ? `Already in your vocabulary (${hint.slice(0, 120)}).`
+            : 'Already in your vocabulary (same word family as something you saved).'
+        )
+        return
+      }
+
+      const lemma = String(dupCheck.lemma || word).trim() || word
+      const knownGerman = vault.map((w) => w.german).filter(Boolean)
+      const lesson = await generateStoryStudioWordLesson({
+        lemma,
+        surfaceForm: word,
+        storyContext: context,
+        knownGermanWords: knownGerman,
+        cefrHint: 'A2',
+      })
+
+      const gloss =
+        String(lesson.glossShort || '').trim() ||
+        String(dupCheck.glossShort || '').trim() ||
+        explanation?.MEANING ||
+        context ||
+        word
+
+      const firstEx =
+        Array.isArray(lesson.sentences) && lesson.sentences.length ? String(lesson.sentences[0].de || '').trim() : ''
+
+      const variantList = [
+        ...new Set(
+          [...(Array.isArray(lesson.variants) ? lesson.variants : []), word]
+            .map((x) => String(x || '').trim())
+            .filter(Boolean)
+        ),
+      ].slice(0, 12)
+
+      const res = await addWordFromStory(lemma, gloss, {
+        microLesson: lesson,
+        variants: variantList,
+        example: firstEx || null,
+      })
+
+      if (res.alreadyExists) {
+        showAppToast('That lemma is already in your vault.')
+        setSaved(true)
+        onSaved?.()
+        return
+      }
+
+      setSaved(true)
+      onSaved?.()
+      showAppToast('Saved to Vocab Vault — newest words appear at the top of the list.')
+    } catch (e) {
+      showAppToast(
+        e?.message === 'NO_API_KEY' ? 'Add API key in Settings' : e?.message || 'Could not save word. Try again.'
+      )
+    } finally {
+      setSaveBusy(false)
+    }
   }
 
   const parsed = explanation || {}
+  const examplePairs = storyExplainExamplePairs(parsed)
 
   return (
     <motion.div
@@ -153,31 +262,28 @@ export default function WordPopup({ word, context, onClose, onSaved }) {
           </div>
         )}
 
-        {(parsed['EXAMPLE 1'] || parsed['EXAMPLE 2']) && (
-          <div className="mb-3 space-y-2">
+        {examplePairs.length > 0 && (
+          <div className="mb-3 space-y-3">
             <span className="text-xs text-slate-500 uppercase tracking-wider">Examples</span>
-            {parsed['EXAMPLE 1'] && (
-              <div className="flex items-start gap-2">
+            {examplePairs.map((pair, i) => (
+              <div key={i} className="flex items-start gap-2">
                 <button
-                  onClick={() => germanVoice.speakWord(parsed['EXAMPLE 1'])}
+                  type="button"
+                  onClick={() => germanVoice.speakWord(pair.de)}
                   className="mt-0.5 text-slate-500 hover:text-brand-400 flex-shrink-0"
                 >
                   <Volume2 size={12} />
                 </button>
-                <p className="text-slate-300 text-sm italic">{parsed['EXAMPLE 1']}</p>
+                <div className="min-w-0">
+                  <p className="text-slate-300 text-sm italic">{pair.de}</p>
+                  {pair.en ? (
+                    <p className="text-slate-400 text-sm mt-1 leading-snug">{pair.en}</p>
+                  ) : (
+                    <p className="text-slate-500 text-xs mt-1 italic">English translation missing — reopen after a moment.</p>
+                  )}
+                </div>
               </div>
-            )}
-            {parsed['EXAMPLE 2'] && (
-              <div className="flex items-start gap-2">
-                <button
-                  onClick={() => germanVoice.speakWord(parsed['EXAMPLE 2'])}
-                  className="mt-0.5 text-slate-500 hover:text-brand-400 flex-shrink-0"
-                >
-                  <Volume2 size={12} />
-                </button>
-                <p className="text-slate-300 text-sm italic">{parsed['EXAMPLE 2']}</p>
-              </div>
-            )}
+            ))}
           </div>
         )}
 
@@ -206,15 +312,17 @@ export default function WordPopup({ word, context, onClose, onSaved }) {
             </div>
           ) : (
             <button
+              type="button"
               onClick={handleSave}
-              className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2.5 bg-brand-500/10 hover:bg-brand-500/20 border border-brand-500/20 rounded-xl text-brand-400 text-sm font-medium transition-colors"
+              disabled={saveBusy}
+              className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2.5 bg-brand-500/10 hover:bg-brand-500/20 border border-brand-500/20 rounded-xl text-brand-400 text-sm font-medium transition-colors disabled:opacity-60 disabled:pointer-events-none"
             >
               <span className="flex items-center gap-2">
-                <Heart size={16} />
-                Add to my list
+                {saveBusy ? <Loader2 size={16} className="animate-spin" /> : <Heart size={16} />}
+                {saveBusy ? 'Saving…' : 'Add to my list'}
               </span>
-              <span className="text-[10px] text-slate-500 font-normal px-1">
-                Vocab Vault + Flashcards (starts as a new card)
+              <span className="text-[10px] text-slate-500 font-normal px-1 text-center leading-tight">
+                AI checks your whole vault, then adds lemma + examples + story (Vocab Vault + Flashcards)
               </span>
             </button>
           )}

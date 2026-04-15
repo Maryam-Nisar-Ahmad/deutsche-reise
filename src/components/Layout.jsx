@@ -1,4 +1,4 @@
-import { Outlet, NavLink, useLocation } from 'react-router-dom'
+import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import Sidebar from './Sidebar'
 import XPToastContainer from './shared/XPToast'
+import GlobalActiveClock from './shared/GlobalActiveClock'
 import { getWordCount, getTodaySession, getMasteredWordCount } from '../lib/db'
 
 const PAGE_TITLES = {
@@ -16,12 +17,12 @@ const PAGE_TITLES = {
   '/grammar': 'Grammar Gym',
   '/speak': 'Speak & Write',
   '/vocab': 'Vocab Vault',
-  '/placement': 'SRS Placement',
   '/settings': 'Settings',
 }
 
 export default function Layout() {
   const location = useLocation()
+  const navigate = useNavigate()
   const [wordCount, setWordCount] = useState(0)
   const [masteredCount, setMasteredCount] = useState(0)
   const [todayXP, setTodayXP] = useState(0)
@@ -53,6 +54,8 @@ export default function Layout() {
         {/* Top bar */}
         <header className="sticky top-0 z-30 flex items-center gap-4 px-6 py-4 bg-surface-950/90 backdrop-blur-sm border-b border-surface-800">
           <h1 className="font-bold text-white text-lg flex-1">{pageTitle}</h1>
+
+          <GlobalActiveClock />
 
           <div className="flex items-center gap-1.5 text-sm font-semibold text-brand-400 bg-brand-500/10 border border-brand-500/20 px-3 py-1.5 rounded-xl">
             <Zap size={14} className="fill-current" />
@@ -94,6 +97,15 @@ export default function Layout() {
             key={path}
             to={path}
             end={path === '/'}
+            onClick={(e) => {
+              if (e.defaultPrevented) return
+              if (e.button !== 0) return
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+              const t = e.currentTarget.getAttribute('target')
+              if (t && t !== '_self') return
+              e.preventDefault()
+              navigate(path)
+            }}
             className={({ isActive }) =>
               `flex-1 flex flex-col items-center gap-1 py-2 text-xs font-medium transition-colors ${
                 isActive ? 'text-brand-400' : 'text-slate-500'

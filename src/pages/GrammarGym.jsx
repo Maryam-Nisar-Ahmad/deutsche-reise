@@ -8,7 +8,6 @@ import {
 import { generateGrammarExercises, explainGrammarFocus, chatWithTutor } from '../lib/deepseek'
 import { getAllWords, saveGrammarSession, updateTodaySession, getTodaySession, addXP } from '../lib/db'
 import { showXPToast } from '../components/shared/XPToast'
-import SessionTimer from '../components/shared/SessionTimer'
 import FillBlank from '../components/grammar/FillBlank'
 import MultipleChoice from '../components/grammar/MultipleChoice'
 import SentenceReorder from '../components/grammar/SentenceReorder'
@@ -187,7 +186,6 @@ export default function GrammarGym() {
 
   return (
     <>
-    <SessionTimer goalMinutes={20} label="Grammar Gym" pageKey="grammar" />
     <div className="max-w-5xl mx-auto">
       <div className="flex gap-6">
         {/* Left panel — topic list */}

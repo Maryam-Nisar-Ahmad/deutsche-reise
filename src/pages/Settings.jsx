@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
   Key, Eye, EyeOff, Volume2, Sliders, Calendar,
@@ -447,13 +446,6 @@ export default function Settings() {
             />
             <span className="text-sm text-slate-400">words (5–40)</span>
           </div>
-        </div>
-
-        <div className="rounded-xl bg-surface-800/50 border border-surface-700 p-3">
-          <Link to="/placement" className="text-sm text-brand-400 hover:underline font-medium">
-            SRS Placement →
-          </Link>
-          <span className="text-xs text-slate-500 ml-2">clear “new” backlog</span>
         </div>
 
         <div>

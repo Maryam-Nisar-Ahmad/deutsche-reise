@@ -2,7 +2,20 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { CreditCard, BookOpen, Dumbbell, BookMarked, Clock, Brain, Flame } from 'lucide-react'
-import { getWordCount, getCardStats, getTodaySession, getWeekSessions, addXP, sumStudyMinutesFromSession, updateTodaySession, getGrammarSessionsThisWeek, initDB } from '../lib/db'
+import {
+  getWordCount,
+  getCardStats,
+  getTodaySession,
+  getJourneyHistorySessions,
+  addXP,
+  getTotalTrackedMinutesToday,
+  getMasteredWordCount,
+  getReviewStageCount,
+  updateTodaySession,
+  getGrammarSessionsThisWeek,
+  getDailySessionByDate,
+  initDB,
+} from '../lib/db'
 import { useStreak } from '../hooks/useStreak'
 import { useSettings } from '../hooks/useSettings'
 import ResearchSchedule from '../components/dashboard/ResearchSchedule'
@@ -39,27 +52,39 @@ export default function Dashboard() {
   const [wordCount, setWordCount] = useState(0)
   const [stats, setStats] = useState({ due: 0, new: 0, learning: 0, review: 0, relearning: 0, total: 0 })
   const [session, setSession] = useState(null)
-  const [weekSessions, setWeekSessions] = useState([])
+  const [historySessions, setHistorySessions] = useState([])
   const [weekGrammarSessions, setWeekGrammarSessions] = useState(0)
   const [loading, setLoading] = useState(true)
   const [phaseInfo, setPhaseInfo] = useState(() => getCurrentPhase())
   const [phaseSuggestion, setPhaseSuggestion] = useState('')
+  const [firmMastered, setFirmMastered] = useState(0)
+  const [reviewStageCount, setReviewStageCount] = useState(0)
+  const [yesterdayMinutes, setYesterdayMinutes] = useState(0)
 
   useEffect(() => {
     const load = async () => {
       await initDB()
       console.log('[DB] initDB completed before Dashboard reads')
-      const [count, cardStats, todaySession, week] = await Promise.all([
+      const y = new Date()
+      y.setDate(y.getDate() - 1)
+      const yesterdayKey = y.toISOString().split('T')[0]
+      const [count, cardStats, todaySession, journeyHistory, firm, reviewSt, ySession] = await Promise.all([
         getWordCount(),
         getCardStats(),
         getTodaySession(),
-        getWeekSessions(),
+        getJourneyHistorySessions(),
+        getMasteredWordCount(),
+        getReviewStageCount(),
+        getDailySessionByDate(yesterdayKey),
       ])
+      setYesterdayMinutes(getTotalTrackedMinutesToday(ySession))
       const grammarWeekCount = await getGrammarSessionsThisWeek()
       setWordCount(count)
+      setFirmMastered(firm)
+      setReviewStageCount(reviewSt)
       setStats(cardStats)
       setSession(todaySession)
-      setWeekSessions(week)
+      setHistorySessions(journeyHistory)
       setWeekGrammarSessions(grammarWeekCount)
       const p = getCurrentPhase()
       setPhaseInfo(p)
@@ -86,6 +111,18 @@ export default function Dashboard() {
     load()
   }, [])
 
+  useEffect(() => {
+    if (loading) return undefined
+    const id = window.setInterval(async () => {
+      try {
+        setSession(await getTodaySession())
+      } catch {
+        /* ignore */
+      }
+    }, 60_000)
+    return () => window.clearInterval(id)
+  }, [loading])
+
   const coverage = getCoverageInfo(wordCount)
   let rawEntryTotal = 0
   try {
@@ -94,7 +131,7 @@ export default function Dashboard() {
   const vocabTooltip = 'Unique families vs raw entries — see FIRST_WEEK_GUIDE.txt'
   const passiveMinutes = session?.passiveMinutes || 0
   const passivePct = Math.min(100, Math.round((passiveMinutes / 90) * 100))
-  const wordsToB2 = Math.max(0, 4000 - wordCount)
+  const wordsToB2 = Math.max(0, 4000 - firmMastered)
   const reviewLoad = estimateWeeklyReviewLoad({ dueCount: stats.due, newCardsPerDay })
 
   const addPassiveMinutes = async (mins) => {
@@ -159,7 +196,7 @@ export default function Dashboard() {
       {/* Top: greeting + level */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <StreakCard streakCount={streakCount} isActiveToday={isActiveToday} />
-        <LevelMeter masteredCount={stats.review} vocabularyExposure={wordCount} />
+        <LevelMeter masteredCount={firmMastered} vocabularyExposure={wordCount} />
       </div>
 
       <p className="text-xs text-slate-500 text-center px-2" title={vocabTooltip}>
@@ -178,12 +215,11 @@ export default function Dashboard() {
       </p>
 
       {/* Stats strip */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         {[
-          { icon: BookMarked, label: 'Mastered (SRS)', value: stats.review.toLocaleString(), color: 'text-brand-400', sub: `${wordCount.toLocaleString()} exposure` },
+          { icon: BookMarked, label: 'Firm mastered', value: firmMastered.toLocaleString(), color: 'text-brand-400', sub: `${reviewStageCount} in review · ${wordCount.toLocaleString()} exposure` },
           { icon: CreditCard, label: 'Due Today', value: stats.due, color: 'text-red-400' },
           { icon: Flame, label: 'Day Streak', value: streakCount, color: 'text-orange-400' },
-          { icon: Clock, label: 'Minutes Today', value: sumStudyMinutesFromSession(session).toLocaleString(), color: 'text-teal-400' },
         ].map((stat, i) => (
           <motion.div
             key={stat.label}
@@ -200,9 +236,37 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Daily Plan + Heatmap */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 space-y-4">
+      <div className="card p-5 border border-surface-700/80">
+        <div className="flex items-center gap-2 mb-3">
+          <Clock size={18} className="text-teal-400 shrink-0" />
+          <h3 className="text-sm font-semibold text-white">Study time (engaged)</h3>
+        </div>
+        <p className="text-xs text-slate-500 mb-4">
+          Same total as the clock in the header: active tab time plus any manual study timers logged today.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <div className="rounded-xl bg-surface-800/60 border border-surface-700 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wider text-slate-500 mb-1">Yesterday</div>
+            <div className="text-2xl font-bold text-teal-400">{yesterdayMinutes.toLocaleString()} min</div>
+            <p className="text-[11px] text-slate-500 mt-1.5">Completed day — compare with today.</p>
+          </div>
+          <div className="rounded-xl bg-surface-800/60 border border-surface-700 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wider text-slate-500 mb-1">Today (so far)</div>
+            <div className="text-2xl font-bold text-brand-400">
+              {getTotalTrackedMinutesToday(session).toLocaleString()} min
+            </div>
+            <p className="text-[11px] text-slate-500 mt-1.5">
+              {yesterdayMinutes > 0 && getTotalTrackedMinutesToday(session) < yesterdayMinutes
+                ? 'Below yesterday’s total at the moment — you can still catch up.'
+                : 'Keep the tab active while you study so the clock counts.'}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Daily Plan + Study trail — same row height on large screens */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:items-stretch">
+        <div className="lg:col-span-2 space-y-4 min-h-0">
           <DailyPlan
             session={session}
             dueCount={stats.due}
@@ -211,7 +275,9 @@ export default function Dashboard() {
           />
           <ResearchSchedule />
         </div>
-        <WeekHeatmap sessions={weekSessions} />
+        <div className="min-h-0 flex flex-col h-full lg:min-h-0">
+          <WeekHeatmap sessions={historySessions} />
+        </div>
       </div>
 
       <div className="card p-5">

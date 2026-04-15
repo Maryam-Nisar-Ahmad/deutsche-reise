@@ -2,17 +2,30 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowLeft, CheckCircle, RotateCcw, Brain, Zap, Timer, Star } from 'lucide-react'
-import { getDueCards, getNewCards, updateCardAfterReview, updateTodaySession, getTodaySession, addXP, getCardStats } from '../lib/db'
+import {
+  getDueCards,
+  getNewCards,
+  updateCardAfterReview,
+  updateTodaySession,
+  getTodaySession,
+  addXP,
+  getCardStats,
+  attachFlashExamplesToCards,
+} from '../lib/db'
 import { useStreak } from '../hooks/useStreak'
 import { useSettings } from '../hooks/useSettings'
 import { estimateWeeklyReviewLoad } from '../lib/reviewLoad'
+import { germanVoice } from '../lib/voice'
+import { shouldIgnoreGlobalKeydown } from '../lib/keyboardGuards'
 import FlashCard from '../components/flashcards/FlashCard'
 import RatingButtons from '../components/flashcards/RatingButtons'
 import Button from '../components/shared/Button'
-import SessionTimer from '../components/shared/SessionTimer'
 import { showXPToast } from '../components/shared/XPToast'
 
 const STAGE = { PRE: 'pre', REVIEW: 'review', POST: 'post' }
+
+/** Fetch all due cards for one session (safety cap so pathological backlogs stay usable). */
+const MAX_DUE_PER_LOAD = 3000
 
 export default function Flashcards() {
   const navigate = useNavigate()
@@ -31,28 +44,28 @@ export default function Flashcards() {
   })
   const [cardMode, setCardMode] = useState('de_to_en')
   const [loading, setLoading] = useState(true)
-  const clozeSessionSalt = useRef(Math.floor(Math.random() * 1e9))
+  const exampleAudioIdxRef = useRef(0)
 
   const newCardsPerDay = settingsNewPerDay
 
-  const selectClozeForCard = useCallback((word, index) => {
-    const list = word?.storyClozes
-    if (!Array.isArray(list) || !list.length) return null
-    const preferCloze = ((Number(word.id) * 17 + index * 13 + clozeSessionSalt.current) % 10) < 6
-    if (!preferCloze) return null
-    const i = Math.abs((Number(word.id) * 31 + index + clozeSessionSalt.current) % list.length)
-    return list[i]
-  }, [])
+  useEffect(() => {
+    exampleAudioIdxRef.current = 0
+  }, [currentIndex])
+
+  useEffect(() => {
+    if (!isFlipped) exampleAudioIdxRef.current = 0
+  }, [isFlipped])
 
   useEffect(() => {
     loadCards()
   }, [])
 
   const loadCards = async () => {
-    const [due, newC, cardStats] = await Promise.all([
-      getDueCards(50),
+    const cardStats = await getCardStats()
+    const dueLimit = Math.min(Math.max(cardStats.due, 1), MAX_DUE_PER_LOAD)
+    const [due, newC] = await Promise.all([
+      getDueCards(dueLimit),
       getNewCards(newCardsPerDay),
-      getCardStats(),
     ])
     setDueCards(due)
     setNewCards(newC)
@@ -60,7 +73,7 @@ export default function Flashcards() {
     setLoading(false)
   }
 
-  const startSession = () => {
+  const startSession = async () => {
     let cards = []
     if (sessionMode === 'both' || sessionMode === 'only_new') {
       cards = [...newCards]
@@ -74,8 +87,9 @@ export default function Flashcards() {
       const j = Math.floor(Math.random() * (i + 1));
       [cards[i], cards[j]] = [cards[j], cards[i]]
     }
-    setAllCards(cards)
-    clozeSessionSalt.current = Math.floor(Math.random() * 1e9)
+    const marked = cards.map((c) => ({ ...c, _sessionStartedAsNew: c.state === 'new' }))
+    const withExamples = await attachFlashExamplesToCards(marked)
+    setAllCards(withExamples)
     setCardMode('de_to_en')
     setCurrentIndex(0)
     setIsFlipped(false)
@@ -111,9 +125,10 @@ export default function Flashcards() {
       // Session complete
       const timeMin = Math.round((Date.now() - sessionStats.startTime) / 60000)
       const session = await getTodaySession()
+      const newCardsStudiedInSession = allCards.filter((c) => c._sessionStartedAsNew).length
       await updateTodaySession({
         flashcardsReviewed: (session.flashcardsReviewed || 0) + allCards.length,
-        newWordsLearned: (session.newWordsLearned || 0) + newCards.filter(c => allCards.includes(c)).length,
+        newWordsLearned: (session.newWordsLearned || 0) + newCardsStudiedInSession,
         minutesStudied: (session.minutesStudied || 0) + timeMin,
       })
       // Perfect session bonus
@@ -130,31 +145,57 @@ export default function Flashcards() {
 
     setCurrentIndex(next)
     setIsFlipped(false)
-    const nextCard = allCards[next]
-    const nextCloze = nextCard ? selectClozeForCard(nextCard.word, next) : null
-    if (!nextCloze && next % 3 === 0) {
+    if (next % 3 === 0) {
       setCardMode(m => m === 'de_to_en' ? 'en_to_de' : 'de_to_en')
     }
-  }, [allCards, currentIndex, sessionStats, newCards, selectClozeForCard])
+  }, [allCards, currentIndex, sessionStats])
 
   useEffect(() => {
     const handler = (e) => {
       if (stage !== STAGE.REVIEW) return
-      if (e.key === ' ' || e.key === 'Enter') {
+      if (shouldIgnoreGlobalKeydown(e)) return
+      const card = allCards[currentIndex]
+      const g = String(card?.word?.german || '').trim()
+      if (!g) return
+
+      if (e.key === ' ') {
+        e.preventDefault()
+        if (germanVoice.isSpeaking()) {
+          germanVoice.stop()
+        } else {
+          germanVoice.speakWord(g)
+        }
+        return
+      }
+      if (e.key === 'ArrowLeft') {
+        if (!isFlipped) return
+        e.preventDefault()
+        const ex = (Array.isArray(card?.flashExamples) ? card.flashExamples : []).filter(
+          (x) => x && String(x.de || '').trim()
+        )
+        if (!ex.length) return
+        const i = exampleAudioIdxRef.current % ex.length
+        const line = String(ex[i].de || '').trim()
+        if (line) germanVoice.speakSentence(line)
+        exampleAudioIdxRef.current += 1
+        return
+      }
+      if (e.key === 'Enter') {
         e.preventDefault()
         if (!isFlipped) setIsFlipped(true)
-      } else if (isFlipped && ['1', '2', '3', '4'].includes(e.key)) {
-        handleRate(parseInt(e.key))
+        return
+      }
+      if (isFlipped && ['1', '2', '3', '4'].includes(e.key)) {
+        handleRate(parseInt(e.key, 10))
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [stage, isFlipped, handleRate])
+  }, [stage, isFlipped, handleRate, allCards, currentIndex])
 
   if (loading) {
     return (
       <>
-        <SessionTimer goalMinutes={20} label="Flashcards" pageKey="flashcards" />
         <div className="flex items-center justify-center min-h-[400px]">
           <div className="h-8 w-8 rounded-full border-3 border-surface-700 border-t-brand-500 animate-spin" style={{borderWidth:3}} />
         </div>
@@ -170,7 +211,6 @@ export default function Flashcards() {
 
     return (
       <>
-        <SessionTimer goalMinutes={20} label="Flashcards" pageKey="flashcards" />
         <div className="max-w-lg mx-auto">
         <div className="card p-8 text-center space-y-6">
           <div>
@@ -189,6 +229,13 @@ export default function Flashcards() {
               <div className="text-xs text-slate-500 mt-0.5">New today</div>
             </div>
           </div>
+
+          {stats.due > MAX_DUE_PER_LOAD && (
+            <p className="text-[11px] text-amber-400/90 text-left px-1">
+              You have over {MAX_DUE_PER_LOAD.toLocaleString()} due reviews. This session includes the first{' '}
+              {MAX_DUE_PER_LOAD.toLocaleString()} — finish it, then start another to clear the rest.
+            </p>
+          )}
 
           <p className="text-[11px] text-slate-500 text-left px-1">
             {reviewLoad.summary} Too many cards? Lower new cards/day in Settings. More detail:{' '}
@@ -241,14 +288,7 @@ export default function Flashcards() {
             </Button>
           )}
 
-          <p className="text-xs text-slate-600 mb-2">Tip: Use keyboard 1/2/3/4 to rate, Space to flip</p>
-          <button
-            type="button"
-            onClick={() => navigate('/placement')}
-            className="text-xs text-brand-400 hover:underline w-full text-center"
-          >
-            SRS Placement — mark words you already know
-          </button>
+          <p className="text-xs text-slate-600 mb-2">Tip: Space = hear German · Enter = show answer · 1–4 = rate (after flip)</p>
         </div>
       </div>
       </>
@@ -262,7 +302,6 @@ export default function Flashcards() {
 
     return (
       <>
-        <SessionTimer goalMinutes={20} label="Flashcards" pageKey="flashcards" />
         <div className="max-w-lg mx-auto">
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
@@ -322,13 +361,11 @@ export default function Flashcards() {
 
   // REVIEW SCREEN
   const card = allCards[currentIndex]
-  const activeCloze = selectClozeForCard(card.word, currentIndex)
   const progress = currentIndex / allCards.length
   const progressPct = Math.round(progress * 100)
 
   return (
     <>
-    <SessionTimer goalMinutes={20} label="Flashcards" pageKey="flashcards" />
     <div className="max-w-2xl mx-auto space-y-4">
       {/* Header */}
       <div className="flex items-center gap-4">
@@ -373,7 +410,6 @@ export default function Flashcards() {
           <FlashCard
             card={card}
             mode={cardMode}
-            cloze={activeCloze}
             isFlipped={isFlipped}
             onFlip={() => setIsFlipped(true)}
           />
@@ -391,7 +427,7 @@ export default function Flashcards() {
           >
             <RatingButtons card={card} onRate={handleRate} />
             <p className="text-center text-xs text-slate-600 mt-2">
-              Press 1/2/3/4 to rate
+              Space = hear German · Press 1/2/3/4 to rate
             </p>
           </motion.div>
         )}
