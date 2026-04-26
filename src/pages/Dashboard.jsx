@@ -23,8 +23,10 @@ import StreakCard from '../components/dashboard/StreakCard'
 import LevelMeter from '../components/dashboard/LevelMeter'
 import DailyPlan from '../components/dashboard/DailyPlan'
 import WeekHeatmap from '../components/dashboard/WeekHeatmap'
+import DailyCoachCard from '../components/dashboard/DailyCoachCard'
 import { showXPToast } from '../components/shared/XPToast'
 import { estimateWeeklyReviewLoad } from '../lib/reviewLoad'
+import { getLocalYesterdayYmd } from '../lib/dailyCoach'
 
 function getCoverageInfo(knownWordCount) {
   if (knownWordCount < 1000) return { coverage: '< 78%', cefr: 'A1', nextMilestone: 1000, label: '1,000 words = 78% text coverage (A2)' }
@@ -65,9 +67,7 @@ export default function Dashboard() {
     const load = async () => {
       await initDB()
       console.log('[DB] initDB completed before Dashboard reads')
-      const y = new Date()
-      y.setDate(y.getDate() - 1)
-      const yesterdayKey = y.toISOString().split('T')[0]
+      const yesterdayKey = getLocalYesterdayYmd()
       const [count, cardStats, todaySession, journeyHistory, firm, reviewSt, ySession] = await Promise.all([
         getWordCount(),
         getCardStats(),
@@ -267,6 +267,15 @@ export default function Dashboard() {
       {/* Daily Plan + Study trail — same row height on large screens */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:items-stretch">
         <div className="lg:col-span-2 space-y-4 min-h-0">
+          <DailyCoachCard
+            phaseInfo={phaseInfo}
+            wordCount={wordCount}
+            firmMastered={firmMastered}
+            weekGrammarSessions={weekGrammarSessions}
+            dailyXPGoal={dailyXPGoal}
+            newCardsPerDay={newCardsPerDay}
+            frequencyWordsPerDay={frequencyWordsPerDay}
+          />
           <DailyPlan
             session={session}
             dueCount={stats.due}

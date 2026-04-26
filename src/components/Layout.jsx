@@ -2,7 +2,7 @@ import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Home, CreditCard, BookOpen, Dumbbell, Library, Bell, Zap, Mic,
+  Home, CreditCard, BookOpen, Dumbbell, Library, Bell, Zap, Mic, ScrollText,
 } from 'lucide-react'
 import Sidebar from './Sidebar'
 import XPToastContainer from './shared/XPToast'
@@ -13,11 +13,20 @@ const PAGE_TITLES = {
   '/': 'Dashboard',
   '/flashcards': 'Flashcards',
   '/frequency': 'Frequency Lab',
+  '/frequency-tales': 'Frequency Tales',
   '/story': 'Story Studio',
   '/grammar': 'Grammar Gym',
   '/speak': 'Speak & Write',
   '/vocab': 'Vocab Vault',
   '/settings': 'Settings',
+}
+
+function titleForPathname(pathname) {
+  const p = pathname || ''
+  if (p.startsWith('/frequency-tales')) return 'Frequency Tales'
+  if (p.startsWith('/story')) return 'Story Studio'
+  if (p.startsWith('/grammar')) return 'Grammar Gym'
+  return PAGE_TITLES[p] ?? 'Deutsche Reise'
 }
 
 export default function Layout() {
@@ -28,7 +37,7 @@ export default function Layout() {
   const [todayXP, setTodayXP] = useState(0)
   const [sidebarWidth, setSidebarWidth] = useState(240)
 
-  const pageTitle = PAGE_TITLES[location.pathname] || 'Deutsche Reise'
+  const pageTitle = titleForPathname(location.pathname)
 
   useEffect(() => {
     const load = async () => {
@@ -86,12 +95,13 @@ export default function Layout() {
       {/* Mobile bottom navigation */}
       <nav className="bottom-nav fixed bottom-0 left-0 right-0 z-40 bg-surface-900 border-t border-surface-800 safe-area-pb">
         {[
-          { path: '/',          icon: Home,        label: 'Home' },
-          { path: '/flashcards', icon: CreditCard,  label: 'Cards' },
-          { path: '/story',     icon: BookOpen,    label: 'Story' },
-          { path: '/grammar',   icon: Dumbbell,    label: 'Grammar' },
-          { path: '/speak',     icon: Mic,         label: 'Speak' },
-          { path: '/vocab',     icon: Library,     label: 'Vocab' },
+          { path: '/',               icon: Home,        label: 'Home' },
+          { path: '/flashcards',     icon: CreditCard,  label: 'Cards' },
+          { path: '/frequency-tales', icon: ScrollText, label: 'Tales' },
+          { path: '/story',          icon: BookOpen,    label: 'Story' },
+          { path: '/grammar',        icon: Dumbbell,    label: 'Grammar' },
+          { path: '/speak',          icon: Mic,         label: 'Speak' },
+          { path: '/vocab',          icon: Library,     label: 'Vocab' },
         ].map(({ path, icon: Icon, label }) => (
           <NavLink
             key={path}

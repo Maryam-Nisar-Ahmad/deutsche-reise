@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Search, Upload, Plus, Volume2, Trash2, Download, Copy,
-  Filter, BookMarked, AlertCircle, Loader2, Sparkles, ChevronRight, Package,
+  Filter, BookMarked, AlertCircle, Loader2, Sparkles, ChevronRight, Package, Bookmark,
 } from 'lucide-react'
 import {
   getAllWords, getWordCount, importWords, addWord, deleteWord, getCardForWord,
-  fixSwappedGermanEnglishInDB, getMasteredWordCount,
+  fixSwappedGermanEnglishInDB, getMasteredWordCount, updateWord,
 } from '../lib/db'
 import { auditVocabularyFrequency, generateExampleSentenceForWord } from '../lib/deepseek'
 import { getLevel } from '../lib/levelCalc'
@@ -46,6 +47,7 @@ function SRSBar({ repetitions = 0 }) {
 }
 
 export default function VocabVault() {
+  const navigate = useNavigate()
   const [words, setWords] = useState([])
   const [cards, setCards] = useState({})
   const [search, setSearch] = useState('')
@@ -113,6 +115,7 @@ export default function VocabVault() {
       const now = Date.now()
       list = list.filter(w => {
         const card = cards[w.id]
+        if (activeFilter === 'Hard') return !!w.isHard
         if (!card) return activeFilter === 'New'
         if (activeFilter === 'New') return card.state === 'new'
         if (activeFilter === 'Learning') return card.state === 'learning' || card.state === 'relearning'
@@ -130,6 +133,7 @@ export default function VocabVault() {
       mastered: all.filter(c => c.state === 'review').length,
       learning: all.filter(c => c.state === 'learning' || c.state === 'relearning').length,
       newCards: all.filter(c => c.state === 'new').length,
+      hardWords: words.filter((w) => !!w.isHard).length,
     }
   }, [words, cards])
 
@@ -140,7 +144,9 @@ export default function VocabVault() {
           w.learnSource === 'frequency' ||
           w.source === 'frequency' ||
           w.learnSource === 'story' ||
-          w.source === 'story'
+          w.source === 'story' ||
+          w.learnSource === 'frequency_tales' ||
+          w.source === 'frequency_tales'
       ).length,
     [words]
   )
@@ -351,6 +357,20 @@ export default function VocabVault() {
     await deleteWord(id)
     setDeleteConfirm(null)
     await loadWords()
+  }
+
+  const toggleHardWord = async (word) => {
+    if (!word?.id) return
+    const nextIsHard = !word.isHard
+    await updateWord(word.id, {
+      isHard: nextIsHard,
+      hardMarkedAt: nextIsHard ? Date.now() : null,
+    })
+    setWords((prev) =>
+      prev.map((w) =>
+        w.id === word.id ? { ...w, isHard: nextIsHard, hardMarkedAt: nextIsHard ? Date.now() : null } : w
+      )
+    )
   }
 
   const handleExport = (mode) => {
@@ -573,6 +593,21 @@ export default function VocabVault() {
         </p>
       </div>
 
+      <div className="card p-4 flex items-center justify-between gap-3">
+        <div>
+          <h3 className="font-semibold text-white text-sm">Hard flashcards for print</h3>
+          <p className="text-xs text-slate-500 mt-1">
+            Mark hard words in Flashcards, then print a PDF deck with 6 or 8 cards per page.
+          </p>
+        </div>
+        <Button
+          onClick={() => navigate('/vocab/hard-print')}
+          disabled={stats.hardWords === 0}
+        >
+          Print hard deck ({stats.hardWords})
+        </Button>
+      </div>
+
       <div className="card p-5 space-y-4">
         <h3 className="text-sm font-semibold text-white">Vocab tools</h3>
         <p className="text-xs text-slate-500">
@@ -649,17 +684,18 @@ export default function VocabVault() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
         {[
           { label: 'Total', value: words.length, color: 'text-white' },
           { label: 'Mastered', value: stats.mastered, color: 'text-green-400' },
           { label: 'Learning', value: stats.learning, color: 'text-yellow-400' },
           { label: 'New', value: stats.newCards, color: 'text-blue-400' },
+            { label: 'Hard', value: stats.hardWords, color: 'text-amber-300' },
           {
-            label: 'Freq + Story',
+            label: 'Freq + Story + Tales',
             value: freqOrStoryVaultCount,
             color: 'text-violet-300',
-            hint: 'From Frequency Lab or Story Studio',
+            hint: 'From Frequency Lab, Story Studio, or Frequency Tales',
           },
         ].map(s => (
           <div key={s.label} className="card p-3 text-center" title={s.hint}>
@@ -681,7 +717,7 @@ export default function VocabVault() {
           />
         </div>
         <div className="flex gap-1.5 flex-wrap">
-          {FILTERS.map(f => (
+          {[...FILTERS, 'Hard'].map(f => (
             <button
               key={f}
               onClick={() => setActiveFilter(f)}
@@ -708,7 +744,7 @@ export default function VocabVault() {
               {freqOrStoryVaultCount > 0 && (
                 <span className="text-slate-600">
                   {' '}
-                  · {freqOrStoryVaultCount.toLocaleString()} from Frequency Lab + Story Studio
+                  · {freqOrStoryVaultCount.toLocaleString()} from Frequency Lab / Story / Tales
                 </span>
               )}
             </>
@@ -805,7 +841,18 @@ export default function VocabVault() {
                   </div>
 
                   {/* Actions */}
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => toggleHardWord(word)}
+                      className={`p-1.5 rounded-lg transition-all ${
+                        word.isHard
+                          ? 'text-amber-300 bg-amber-500/10'
+                          : 'text-slate-400 hover:text-amber-300 hover:bg-surface-700'
+                      }`}
+                      title={word.isHard ? 'Remove from hard list' : 'Save to hard list'}
+                    >
+                      <Bookmark size={14} className={word.isHard ? 'fill-current' : ''} />
+                    </button>
                     <button
                       onClick={() => germanVoice.speakWord(word.german)}
                       className="p-1.5 text-slate-400 hover:text-white hover:bg-surface-700 rounded-lg transition-all"

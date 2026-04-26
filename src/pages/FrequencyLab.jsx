@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useSettings } from '../hooks/useSettings'
 import { motion } from 'framer-motion'
 import {
@@ -50,6 +51,7 @@ import StoryText from '../components/story/StoryText'
 import { showXPToast, showAppToast } from '../components/shared/XPToast'
 import { unlockStoryReadyAudio, playStoryReadyChime } from '../lib/storyReadySound'
 import { shouldIgnoreGlobalKeydown } from '../lib/keyboardGuards'
+import { FREQ_TALES_TARGET_OPTIONS } from '../lib/frequencyTalesConstants'
 
 /** Next learnable ranks: gloss + AI lesson prefetch window. */
 const FREQUENCY_PREFETCH_WINDOW = 30
@@ -134,6 +136,7 @@ function formatRelativeTime(ts) {
 }
 
 export default function FrequencyLab() {
+  const navigate = useNavigate()
   const { frequencyWordsPerDay } = useSettings()
   const [entries, setEntries] = useState([])
   const [words, setWords] = useState([])
@@ -427,7 +430,13 @@ export default function FrequencyLab() {
 
   /** Main card: Space = headword audio; → = word → file examples → AI sentences → story (one step per key). */
   useEffect(() => {
-    if (savedLessonModal != null || consolidationModal != null || fullMatchBusy || !current) return undefined
+    if (
+      savedLessonModal != null ||
+      consolidationModal != null ||
+      fullMatchBusy ||
+      !current
+    )
+      return undefined
 
     const buildMainPlaylist = () => {
       const out = []
@@ -484,7 +493,15 @@ export default function FrequencyLab() {
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [savedLessonModal, consolidationModal, fullMatchBusy, current, lesson, fileExamples, freqListSorted])
+  }, [
+    savedLessonModal,
+    consolidationModal,
+    fullMatchBusy,
+    current,
+    lesson,
+    fileExamples,
+    freqListSorted,
+  ])
 
   useEffect(() => {
     if (!savedLessonModal || savedLessonModal.status !== 'ready' || !savedLessonModal.lesson) return undefined
@@ -875,8 +892,12 @@ export default function FrequencyLab() {
         (String(lessonForAdd?.storyDe || '').trim() ? String(lessonForAdd.storyDe).trim().split(/\n+/)[0].slice(0, 400) : '') ||
         null
 
+      const cueSentenceEn =
+        (Array.isArray(lessonForAdd?.sentences) && String(lessonForAdd.sentences[0]?.en || '').trim()) || ''
+
       const res = await addWordFromFrequency(current.headword, gloss, current.rank, {
         example: exampleDe || null,
+        cueSentenceEn: cueSentenceEn || undefined,
       })
       if (res.alreadyExists) {
         showAppToast('Already in your vault.')
@@ -945,6 +966,26 @@ export default function FrequencyLab() {
               (or <code className="text-amber-200/90">/FIRST_WEEK_GUIDE.txt</code> with the dev server).
             </p>
           </div>
+        </div>
+      </div>
+
+      <div className="card p-5 bg-gradient-to-r from-teal-900/25 to-surface-900 border border-teal-700/30">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+          <div className="flex gap-3 min-w-0">
+            <BookOpen className="text-teal-400 shrink-0 mt-0.5" size={22} />
+            <div className="min-w-0">
+              <h3 className="text-base font-semibold text-white">Frequency Tales</h3>
+              <p className="text-sm text-slate-400 mt-1 leading-snug">
+                Full library, audio, shadowing: choose {FREQ_TALES_TARGET_OPTIONS[0]}–
+                {FREQ_TALES_TARGET_OPTIONS[FREQ_TALES_TARGET_OPTIONS.length - 1]} queued frequency targets per tale (several
+                rich chapters per story, many targets woven per chapter; A1 + vault + function words only otherwise). Opens
+                Frequency Tales.
+              </p>
+            </div>
+          </div>
+          <Button className="shrink-0 self-start" onClick={() => navigate('/frequency-tales')}>
+            <ScrollText size={16} /> Open Frequency Tales
+          </Button>
         </div>
       </div>
 
@@ -1255,6 +1296,11 @@ export default function FrequencyLab() {
                                 Freq
                               </span>
                             )}
+                            {(w.learnSource === 'frequency_tales' || w.source === 'frequency_tales') && (
+                              <span className="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-pink-500/15 text-pink-200 border border-pink-400/35">
+                                Tales
+                              </span>
+                            )}
                           </div>
                           <p className="text-xs text-slate-400 mt-0.5 leading-snug">{w.translation || '—'}</p>
                         </div>
@@ -1279,7 +1325,10 @@ export default function FrequencyLab() {
             ? `${savedLessonModal.word.german} · ${
                 savedLessonModal.word.learnSource === 'story' || savedLessonModal.word.source === 'story'
                   ? 'Story Studio'
-                  : `rank #${savedLessonModal.word.frequencyRank ?? '—'}`
+                  : savedLessonModal.word.learnSource === 'frequency_tales' ||
+                      savedLessonModal.word.source === 'frequency_tales'
+                    ? 'Frequency Tales'
+                    : `rank #${savedLessonModal.word.frequencyRank ?? '—'}`
               }`
             : ''
         }
@@ -1302,10 +1351,13 @@ export default function FrequencyLab() {
 
             {savedLessonModal.status === 'empty' && (
               <p className="text-sm text-slate-400 leading-relaxed">
-                {savedLessonModal.word.learnSource === 'story' || savedLessonModal.word.source === 'story' ? (
+                {savedLessonModal.word.learnSource === 'story' ||
+                savedLessonModal.word.source === 'story' ||
+                savedLessonModal.word.learnSource === 'frequency_tales' ||
+                savedLessonModal.word.source === 'frequency_tales' ? (
                   <>
-                    No micro-lesson is stored on this word (unusual). Try saving the word again from Story Studio, or
-                    check that the save completed.
+                    No micro-lesson is stored on this word (unusual). Try saving the word again from Story Studio or
+                    Frequency Tales, or check that the save completed.
                   </>
                 ) : (
                   <>

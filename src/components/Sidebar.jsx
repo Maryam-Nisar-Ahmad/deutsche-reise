@@ -2,7 +2,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import {
   Home, CreditCard, BookOpen, Dumbbell, Library, Settings,
-  Flame, Zap, ChevronLeft, ChevronRight, Mic, ListOrdered,
+  Flame, Zap, ChevronLeft, ChevronRight, Mic, ListOrdered, ScrollText,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { getCardStats, getTotalXP } from '../lib/db'
@@ -12,6 +12,7 @@ const navItems = [
   { path: '/',          icon: Home,      label: 'Dashboard' },
   { path: '/flashcards', icon: CreditCard, label: 'Flashcards', badge: true },
   { path: '/frequency', icon: ListOrdered, label: 'Frequency Lab' },
+  { path: '/frequency-tales', icon: ScrollText, label: 'Frequency Tales' },
   { path: '/story',     icon: BookOpen,  label: 'Story Studio' },
   { path: '/grammar',   icon: Dumbbell,  label: 'Grammar Gym' },
   { path: '/speak',     icon: Mic,       label: 'Speak & Write' },

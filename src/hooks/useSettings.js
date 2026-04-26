@@ -21,6 +21,9 @@ export function useSettings() {
   const [frequencyWordsPerDay, setFrequencyWordsPerDayState] = useState(
     () => parseInt(localStorage.getItem('dr_frequency_words_per_day') || '25', 10)
   )
+  const [speakGermanOnReveal, setSpeakGermanOnRevealState] = useState(
+    () => localStorage.getItem('dr_flashcard_speak_on_reveal') === 'true'
+  )
 
   const setApiKey = (key) => {
     const trimmed = key.trim()
@@ -56,6 +59,11 @@ export function useSettings() {
     setFrequencyWordsPerDayState(v)
   }
 
+  const setSpeakGermanOnReveal = (val) => {
+    localStorage.setItem('dr_flashcard_speak_on_reveal', String(!!val))
+    setSpeakGermanOnRevealState(!!val)
+  }
+
   return {
     apiKey,
     setApiKey,
@@ -69,5 +77,7 @@ export function useSettings() {
     setTargetRetention,
     frequencyWordsPerDay,
     setFrequencyWordsPerDay,
+    speakGermanOnReveal,
+    setSpeakGermanOnReveal,
   }
 }

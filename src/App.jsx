@@ -10,6 +10,8 @@ import Settings from './pages/Settings'
 import SpeakLab from './pages/SpeakLab'
 import Onboarding from './pages/Onboarding'
 import FrequencyLab from './pages/FrequencyLab'
+import FrequencyTales from './pages/FrequencyTales'
+import HardFlashcardsPrint from './pages/HardFlashcardsPrint'
 export default function App() {
   const [onboarded, setOnboarded] = useState(null)
 
@@ -62,10 +64,13 @@ export default function App() {
           <Route path="/flashcards" element={<Flashcards />} />
           <Route path="/story" element={<StoryStudio />} />
           <Route path="/story/:id" element={<StoryStudio />} />
+          <Route path="/frequency-tales" element={<FrequencyTales />} />
+          <Route path="/frequency-tales/:id" element={<FrequencyTales />} />
           <Route path="/grammar" element={<GrammarGym />} />
           <Route path="/grammar/:focus" element={<GrammarGym />} />
           <Route path="/speak" element={<SpeakLab />} />
           <Route path="/vocab" element={<VocabVault />} />
+          <Route path="/vocab/hard-print" element={<HardFlashcardsPrint />} />
           <Route path="/frequency" element={<FrequencyLab />} />
           <Route path="/settings" element={<Settings />} />
         </Route>

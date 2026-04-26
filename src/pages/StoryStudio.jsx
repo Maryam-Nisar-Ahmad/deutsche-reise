@@ -28,11 +28,13 @@ import StoryText from '../components/story/StoryText'
 import AudioControls from '../components/story/AudioControls'
 import ShadowMode from '../components/story/ShadowMode'
 import WordPopup from '../components/story/WordPopup'
+import { extractStoryEncounterContext } from '../lib/storyContext'
+import { parseStoryContent } from '../lib/storyParse'
 import Modal from '../components/shared/Modal'
 import Button from '../components/shared/Button'
 
 const THEMES = ['Adventure', 'Romance', 'Mystery', 'Science', 'History', 'Daily Life', 'Fantasy', 'Travel']
-const LEVELS = ['Auto', 'A1-A2', 'A2-B1', 'B1-B2']
+const LEVELS = ['Auto', 'A1', 'A1-A2', 'A2-B1', 'B1-B2']
 const CHAPTERS = [4, 6, 8]
 
 function normalizeWordMeanings(obj) {
@@ -41,32 +43,6 @@ function normalizeWordMeanings(obj) {
     out[normalizeGerman(k)] = v
   }
   return out
-}
-
-function parseStoryContent(content) {
-  const rawChapters = content.split(/---CHAPTER---/i)
-  return rawChapters
-    .map(raw => {
-      const lines = raw.trim().split('\n').filter(Boolean)
-      if (!lines.length) return null
-
-      let text = raw.trim()
-      let summary = ''
-
-      // Extract English summary
-      const summaryMatch = text.match(/\[ENGLISH_SUMMARY:\s*([^\]]+)\]/i)
-      if (summaryMatch) {
-        summary = summaryMatch[1].trim()
-        text = text.replace(/\[ENGLISH_SUMMARY:[^\]]+\]/i, '').trim()
-      }
-
-      // Extract title (first line starting with Kapitel)
-      const titleMatch = text.match(/^(Kapitel\s*\d+[^:\n]*:?[^\n]*)/im)
-      const title = titleMatch ? titleMatch[1].trim() : `Kapitel ${rawChapters.indexOf(raw) + 1}`
-
-      return { title, text, summary }
-    })
-    .filter(Boolean)
 }
 
 export default function StoryStudio() {
@@ -123,7 +99,7 @@ export default function StoryStudio() {
 
   const loadStories = async () => {
     const all = await getAllStories()
-    setStories(all)
+    setStories(all.filter((s) => !s.storyType || s.storyType === 'studio'))
     setLoading(false)
   }
 
@@ -368,16 +344,24 @@ export default function StoryStudio() {
   const handleShadowComplete = async () => {
     setShadowMode(false)
     const session = await getTodaySession()
-    await updateTodaySession({ shadowingMinutes: (session.shadowingMinutes || 0) + 10 })
+    await updateTodaySession({
+      shadowingMinutes: (session.shadowingMinutes || 0) + 10,
+      storyShadowMinutes: (session.storyShadowMinutes || 0) + 10,
+    })
     await addXP(25)
     showXPToast(25, 'Shadowing complete!')
   }
 
   const handleWordClick = (lookupKey, displayWord) => {
     const chapter = currentStory?.chapters[currentChapterIdx]
-    const q = (lookupKey || displayWord || '').toLowerCase()
-    const context = chapter?.text?.split(/[.!?]/).find(s => s.toLowerCase().includes(q)) || ''
-    setActiveWordPopup({ word: displayWord || lookupKey, context: context.trim() })
+    const raw = chapter?.text || ''
+    const richContext = extractStoryEncounterContext(raw, displayWord, lookupKey)
+    const fallback =
+      chapter?.text?.split(/[.!?]/).find((s) =>
+        s.toLowerCase().includes((lookupKey || displayWord || '').toLowerCase())
+      ) || ''
+    const context = (richContext || '').trim() || fallback.trim()
+    setActiveWordPopup({ word: displayWord || lookupKey, context })
   }
 
   const handleToggleShadow = () => {

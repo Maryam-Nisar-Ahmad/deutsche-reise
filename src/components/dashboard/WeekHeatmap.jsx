@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
 import clsx from 'clsx'
 import {
+  getLocalCalendarYmd,
   getTotalTrackedMinutesToday,
   getSessionStudyBreakdown,
 } from '../../lib/db'
@@ -123,6 +124,7 @@ function HistoryTooltipPanel({ session, anchorRect }) {
   const day = session.date
   const xp = session?.xpEarned || 0
   const reviews = session?.flashcardsReviewed || 0
+  const newWordsAdded = session?.newWordsAdded || 0
   const passiveMinutes = session?.passiveMinutes || 0
   const studyMin = getTotalTrackedMinutesToday(session)
   const breakdown = getSessionStudyBreakdown(session)
@@ -149,6 +151,7 @@ function HistoryTooltipPanel({ session, anchorRect }) {
       <div className="text-slate-400 mb-0.5">{xp} XP</div>
       <div className="text-teal-300 font-medium mb-1">{formatHeatmapMinutes(studyMin)} total</div>
       {reviews > 0 && <div className="text-slate-500 mb-1.5">{reviews} card reviews</div>}
+      <div className="text-slate-500 mb-1.5">{newWordsAdded} new words added</div>
       {passiveMinutes > 0 && (
         <div className="text-blue-300 text-[10px] mb-1.5">
           {(passiveMinutes / 60).toFixed(1)}h passive immersion
@@ -182,7 +185,7 @@ function HistoryTooltipPanel({ session, anchorRect }) {
 
 export default function WeekHeatmap({ sessions = [] }) {
   const scrollRef = useRef(null)
-  const todayStr = new Date().toISOString().split('T')[0]
+  const todayStr = getLocalCalendarYmd()
   const [hover, setHover] = useState(null)
   const [, bumpRender] = useReducer((x) => x + 1, 0)
 

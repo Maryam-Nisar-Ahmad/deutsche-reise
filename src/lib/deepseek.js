@@ -107,6 +107,51 @@ function stripStorySummariesForLangCheck(text) {
   return (text || '').replace(/\[ENGLISH_SUMMARY:[^\]]+\]/gi, ' ')
 }
 
+/** Word tokens in chapter bodies only (summaries stripped). */
+function germanWordTokenCount(raw) {
+  const body = stripStorySummariesForLangCheck(raw)
+  return (body.match(/[a-zäöüß]+/gi) || []).length
+}
+
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** Whether headword appears in story (inflection-friendly substring match). */
+function lemmaAppearsInGermanStory(raw, headword) {
+  const hw = String(headword || '').trim()
+  if (!hw) return true
+  const body = stripStorySummariesForLangCheck(raw).toLowerCase()
+  const parts = hw.split(/\s+/).filter(Boolean)
+  if (parts.length > 1) return parts.every((p) => body.includes(p.toLowerCase()))
+  return new RegExp(escapeRegExp(hw.toLowerCase()), 'i').test(body)
+}
+
+function analyzeFrequencyStoryDraft(raw, targetEntries) {
+  const parts = String(raw || '').split(/---CHAPTER---/i).filter((p) => p.trim())
+  const chapterWordCounts = parts.map((chunk) =>
+    germanWordTokenCount(chunk)
+  )
+  const minChapter = chapterWordCounts.length ? Math.min(...chapterWordCounts) : 0
+  const avgChapter =
+    chapterWordCounts.length > 0
+      ? chapterWordCounts.reduce((a, b) => a + b, 0) / chapterWordCounts.length
+      : 0
+  const missing = []
+  for (const e of targetEntries || []) {
+    const hw = String(e.headword || '').trim()
+    if (!hw) continue
+    if (!lemmaAppearsInGermanStory(raw, hw)) missing.push(hw)
+  }
+  return {
+    chapterCountParsed: parts.length,
+    chapterWordCounts,
+    minChapter,
+    avgChapter,
+    missing,
+  }
+}
+
 /** Reject stories where the model wrote English narrative (common failure mode). */
 function isProbablyGermanStory(text) {
   const body = stripStorySummariesForLangCheck(text).slice(0, 3500).toLowerCase()
@@ -150,6 +195,157 @@ Write ONLY the story in German (plus summary lines). Start with "Kapitel 1:"`
 CRITICAL FIX: Your previous draft failed language check (too much English in the body). Rewrite the entire story: German only for all story text. English only in [ENGLISH_SUMMARY: ...] lines.`
     raw = cleanMarkdown(await invokeDeepSeek({ systemPrompt, userPrompt: fixPrompt, temperature: 0.38, maxTokens: 4000 }))
   }
+  return raw
+}
+
+const FREQ_TARGETS_STORY_CHAPTERS_DEFAULT = 10
+
+/**
+ * Ten-chapter German story for Frequency Lab: next N target lemmas + mostly known vault vocabulary.
+ * Same wire format as generateStory (---CHAPTER---, Kapitel titles, [ENGLISH_SUMMARY:]).
+ */
+export async function generateFrequencyTargetsStory({
+  targetEntries,
+  knownGermanWords,
+  chapterCount = FREQ_TARGETS_STORY_CHAPTERS_DEFAULT,
+  cefrHint = 'A1',
+}) {
+  const targets = [...(Array.isArray(targetEntries) ? targetEntries : [])].sort(
+    (a, b) => Number(a.rank || 0) - Number(b.rank || 0)
+  )
+  if (!targets.length) throw new Error('No target words for story')
+
+  const known = shuffleArray(knownGermanWords || [])
+    .slice(0, 650)
+    .join(', ')
+
+  const lines = targets.map((e) => {
+    const rank = Number(e.rank)
+    const hw = String(e.headword || '').trim()
+    const snip = String(e.detailSnippet || e.detail || '').slice(0, 280).replace(/\s+/g, ' ')
+    return `- Rank ${Number.isFinite(rank) ? rank : '—'} "${hw}"${snip ? ` · ${snip}` : ''}`
+  })
+
+  const targetsHint = Math.max(2, Math.ceil(targets.length / chapterCount))
+
+  const systemPrompt = `You are a German-language story writer for ABSOLUTE BEGINNERS (CEFR ${cefrHint}).
+
+STRICT RULES:
+- Every line of narration and dialogue MUST be German. Never write English paragraphs for the story itself.
+- English is allowed ONLY inside tags: [ENGLISH_SUMMARY: ...] after each chapter.
+- Return plain text only. No markdown, no # headers, no asterisks in German text.
+- Vocabulary control is stricter than normal "graded reader" rules: follow the user's vocabulary lists exactly (see user message).`
+
+  const userPrompt = `Write ONE coherent German mini-novel with exactly ${chapterCount} chapters (Kapitel 1 through ${chapterCount}).
+
+LANGUAGE LEVEL: **${cefrHint} only** — very easy German only.
+- Short sentences (often 4–10 words). Mostly **Präsens**. Subject–verb–object. Connect with **und**, **dann**, **aber**, **auch**, **nicht**.
+- Avoid: passive voice, Konjunktiv, nested **dass/weil** chains, literary style, idioms that are not in the vault.
+- If stuck, use repetition, dialogue ("Ja." / "Okay."), and simple questions (**Was ist das?** **Wo ist …?**) instead of harder grammar.
+
+=== THE ONLY "NEW" WORDS ALLOWED (exactly these ${targets.length} targets — each MUST appear at least once in the WHOLE story; natural inflections OK) ===
+${lines.join('\n')}
+
+=== LEARNER VOCABULARY VAULT — every OTHER content word MUST come from here (reuse liberally; inflected forms of these lemmas are OK) ===
+${known || '(vault empty — then use only the targets above plus German function words: articles, ich/du/wir, und/oder/aber, nicht, sehr, hier, dort, gut, gern, basic numbers, haben/sein/können/müssen/wollen/mögen in simple present, common prepositions)'}
+
+**HARD VOCABULARY RULE (non-negotiable):**
+- Aside from normal German **function words** (articles der/die/das/ein; personal pronouns; und/oder/aber; nicht; hier/dort; question words wer/was/wo/wie/warum; zu/seit/mit/in/auf/an/von/aus/bei/nach (basic uses); sehr; und similar glue), **do not use any noun, verb, adjective, or adverb** that is neither (1) one of the TARGET WORDS above (with normal inflection), nor (2) clearly based on a lemma from the VOCABULARY VAULT list.
+- If you cannot say something with vault + targets + function words, **rewrite the sentence** until you can.
+- These targets are the **only** new lemmas; nothing else rare or textbook-advanced.
+
+LENGTH + TARGET USE (critical — readers print these chapters):
+- Aim about **${targetsHint}** different target lemmas per chapter on average (some chapters may use more, some fewer).
+- Each chapter body (German only, before [ENGLISH_SUMMARY]) MUST be **at least 85 German words** — count words before you finish the chapter. If too short, add more simple sentences, dialogue, or a second short scene in the same chapter.
+- Total reading depth matters more than style: repetition is fine for A1.
+
+PEDAGOGY:
+- One simple continuous plot (same character(s), concrete everyday setting like school, home, work, shop, train).
+- Spread all ${targets.length} targets across the ${chapterCount} chapters; **do not** finish before every target has appeared at least once.
+- Chapter titles: "Kapitel N: [short simple German title]"
+- After EACH chapter body, exactly one line: [ENGLISH_SUMMARY: one English sentence]
+- Separate chapters with exactly: ---CHAPTER---
+
+Start with "Kapitel 1:"`
+
+  let raw = cleanMarkdown(
+    await invokeDeepSeek({
+      systemPrompt,
+      userPrompt,
+      temperature: 0.42,
+      maxTokens: 8192,
+    })
+  )
+
+  let full = stripStorySummariesForLangCheck(raw)
+  if (!isProbablyGermanStory(full)) {
+    const fixPrompt = `${userPrompt}
+
+CRITICAL FIX: Your draft failed German-language check (too much English in the body). Rewrite ALL chapter bodies in German only; English ONLY in [ENGLISH_SUMMARY: ...] lines. Keep ---CHAPTER--- separators. Stay **A1**: short sentences, Präsens, and **only** vocabulary from the learner vault + the listed target words (+ function words).`
+    raw = cleanMarkdown(
+      await invokeDeepSeek({
+        systemPrompt,
+        userPrompt: fixPrompt,
+        temperature: 0.38,
+        maxTokens: 8192,
+      })
+    )
+    full = stripStorySummariesForLangCheck(raw)
+  }
+
+  const analysis = analyzeFrequencyStoryDraft(raw, targets)
+  const needsRepair =
+    analysis.missing.length > 0 ||
+    analysis.minChapter < 65 ||
+    analysis.avgChapter < 72 ||
+    analysis.chapterCountParsed !== chapterCount
+
+  if (needsRepair) {
+    const repairPrompt = `You are rewriting a Frequency Tale that FAILED automatic validation.
+
+PROBLEMS DETECTED:
+- Parsed chapters: ${analysis.chapterCountParsed} (required exactly ${chapterCount})
+- Shortest chapter (German word tokens only): ~${Math.round(analysis.minChapter)} (minimum ~65 required)
+- Average chapter length: ~${Math.round(analysis.avgChapter)} (aim ~85+ words per chapter)
+- Target lemmas missing from the German text (must appear at least once each): ${analysis.missing.length ? analysis.missing.join(', ') : '(none — still expand length)'}
+
+ORIGINAL DRAFT (fix, do not shorten):
+${raw}
+
+TASK: Rewrite the COMPLETE story from scratch in the same format.
+- Exactly ${chapterCount} chapters separated by ---CHAPTER---
+- Every target lemma from the list must appear at least once in the German text (inflections OK).
+- Each chapter German body ≥ **85 words** before its [ENGLISH_SUMMARY: ...] line.
+- Stay **${cefrHint}**: short simple sentences, Präsens, same vocabulary rules as before (vault + targets + function words only).
+
+Full target list for reference:
+${lines.join('\n')}
+
+Start with "Kapitel 1:"`
+
+    raw = cleanMarkdown(
+      await invokeDeepSeek({
+        systemPrompt,
+        userPrompt: repairPrompt,
+        temperature: 0.35,
+        maxTokens: 8192,
+      })
+    )
+    full = stripStorySummariesForLangCheck(raw)
+    if (!isProbablyGermanStory(full)) {
+      raw = cleanMarkdown(
+        await invokeDeepSeek({
+          systemPrompt,
+          userPrompt: `${repairPrompt}
+
+CRITICAL: The rewrite still failed German-only check. German chapter bodies only; English only in [ENGLISH_SUMMARY: ...].`,
+          temperature: 0.32,
+          maxTokens: 8192,
+        })
+      )
+    }
+  }
+
   return raw
 }
 
@@ -270,7 +466,7 @@ No markdown, no code fences — JSON only.`
 export async function explainWord(germanWord, context, userVocabSample) {
   const userPrompt = `Explain the German word "${germanWord}" to a B1-level learner.
 
-Context sentence: "${context || 'none'}"
+Context sentence: "${String(context || 'none').slice(0, 1100)}"
 
 Provide ALL of the following, clearly labeled (exact labels, one line each to start a block):
 GERMAN: ${germanWord}
@@ -533,7 +729,9 @@ Use mostly words from this KNOWN list for all German sentences and the story (co
 ${known}
 
 Rules:
-- "fullMeaning": 2-4 sentences in English only — nuance, usage, register, collocations (like a good dictionary usage note; not a repeat of glossShort only).
+- "fullMeaning": 2-4 sentences in plain everyday English ONLY. Explain when people use this word in real situations, what situations feel right or wrong, and typical phrases — like talking to a friend who hates grammar.
+- FORBIDDEN in fullMeaning (do not use these or similar): grammar jargon, linguistic labels, case names, clause types, parts of speech as terminology (e.g. no "pronominal adverb", "dative", "subordinate clause", "prefix", "modal verb" as jargon). Never define the word using metalanguage — only describe meaning-in-context.
+- If you must contrast with another German word, say it in plain English ("people say X when …, but Y when …").
 - 4 short German example sentences using the target word (different contexts). Each object MUST include a non-empty accurate English "en" translation.
 - One German mini-story (70–110 words) that uses the target word at least twice and otherwise prefers the known list.
 - Plain style, no markdown in German fields.
@@ -660,7 +858,7 @@ Use mostly words from this KNOWN list for all German sentences and the story (co
 ${known}
 
 Rules:
-- "fullMeaning": 2-4 sentences in English only — nuance, usage, register (same depth as a dictionary usage note).
+- "fullMeaning": 2-4 sentences in plain everyday English. When do people say this, in what situation, what it sounds like; no grammar metalanguage (forbidden: "pronominal adverb", "dative", "subordinate clause", "prefix" as labels, etc.). Like explaining to a friend who dislikes grammar.
 - 4 short German example sentences using the lemma (natural inflections allowed). Each object MUST include a non-empty accurate English "en" translation.
 - One German mini-story (70–110 words) that uses the lemma at least twice and otherwise prefers the known list.
 - "variants": optional array of up to 6 strings — common inflected forms or close collocations worth linking to this lemma for flashcard context matching (no duplicates of the lemma itself).

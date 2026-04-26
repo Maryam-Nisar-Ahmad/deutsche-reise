@@ -32,6 +32,8 @@ export default function StoryText({
   unknownMeanings = {},
   /** normalizeGerman(surface) → short English (from AI), for inflected forms not in vault */
   surfaceGlosses = {},
+  /** Frequency Lab “learn through story”: highlight these lemma keys (normalized) until in vault */
+  frequencyTargetKeys = null,
   activeWordIndex = -1,
   onWordClick,
 }) {
@@ -70,6 +72,8 @@ export default function StoryText({
         const isActive = td.wordIndex === activeWordIndex
         const known = td.isKnown
         const unknown = td.hasUnknownMeaning
+        const isFreqTarget =
+          !!frequencyTargetKeys && !!td.key && frequencyTargetKeys.has(td.key)
         const gloss = td.key && surfaceGlosses[td.key] ? surfaceGlosses[td.key] : undefined
         const tooltip = known
           ? (knownTranslations.get(td.key) || gloss || 'In your vocabulary')
@@ -84,9 +88,18 @@ export default function StoryText({
               'transition-colors duration-100 rounded-sm cursor-pointer',
               isActive && 'word-active',
               !isActive && known && 'word-known',
-              !isActive && !known && unknown && 'word-unknown',
-              !isActive && !known && !unknown && gloss && 'word-glossed',
-              !isActive && !known && !unknown && !gloss && 'word-plain hover:bg-white/10',
+              !isActive &&
+                !known &&
+                isFreqTarget &&
+                'word-freq-target ring-1 ring-red-400/40 bg-red-500/15 text-red-100',
+              !isActive && !known && !isFreqTarget && unknown && 'word-unknown',
+              !isActive && !known && !isFreqTarget && !unknown && gloss && 'word-glossed',
+              !isActive &&
+                !known &&
+                !isFreqTarget &&
+                !unknown &&
+                !gloss &&
+                'word-plain hover:bg-white/10',
             )}
           >
             {td.token}

@@ -13,7 +13,7 @@ const DB_NAME = 'deutsche-reise-db'
 const DB_VERSION = 8
 
 /** Words in SRS state `new` only enter Flashcards after this delay from `word.addedAt` (FSRS hygiene). */
-export const FLASHCARD_NEW_INTRO_DELAY_MS = 24 * 60 * 60 * 1000
+export const FLASHCARD_NEW_INTRO_DELAY_MS = 14 * 60 * 60 * 1000
 
 /**
  * @param {object | null} word
@@ -213,6 +213,7 @@ export async function importWords(wordsArray, meta = {}) {
         frequencyTier: tier,
         encounterCount: 0,
         storyClozes: [],
+        isHard: false,
       }
       const wordId = await wordStore.add(wordData)
 
@@ -266,6 +267,7 @@ export async function addWord(german, translation) {
     frequencyTier: getFrequencyTier(german.trim()),
     encounterCount: 0,
     storyClozes: [],
+    isHard: false,
   })
 
   await cardStore.add(bootstrapNewSrsCard(wordId, addedAt))
@@ -298,6 +300,8 @@ export async function addWordFromFrequency(german, translation, frequencyRank, o
   }
 
   const addedAt = Date.now()
+  const cueEn = String(options.cueSentenceEn || options.flashCueSentenceEn || '').trim()
+
   const wordId = await wordStore.add({
     german: g,
     translation: (translation || '').trim() || 'Imported',
@@ -313,6 +317,11 @@ export async function addWordFromFrequency(german, translation, frequencyRank, o
     frequencyTier: Math.min(2, getFrequencyTier(g) || 1),
     encounterCount: 0,
     storyClozes: [],
+    isHard: false,
+    flashCueSentenceEn: cueEn || undefined,
+    storyEncounterContext: String(options.storyEncounterContext || '')
+      .trim()
+      .slice(0, 3500) || undefined,
   })
 
   await cardStore.add(bootstrapNewSrsCard(wordId, addedAt))
@@ -363,6 +372,11 @@ export async function addWordFromStory(german, translation, options = {}) {
   const variantsRaw = Array.isArray(options.variants) ? options.variants : []
   const variants = [...new Set(variantsRaw.map((x) => String(x || '').trim()).filter(Boolean))].slice(0, 12)
 
+  const cueFromLesson =
+    microLesson?.sentences?.[0]?.en != null ? String(microLesson.sentences[0].en).trim() : ''
+  const cueEn =
+    String(options.flashCueSentenceEn || options.cueSentenceEn || '').trim() || cueFromLesson
+
   const addedAt = Date.now()
   const wordId = await wordStore.add({
     german: g,
@@ -379,7 +393,89 @@ export async function addWordFromStory(german, translation, options = {}) {
     frequencyTier: Math.min(2, getFrequencyTier(g) || 1),
     encounterCount: 0,
     storyClozes: [],
+    isHard: false,
     microLesson,
+    flashCueSentenceEn: cueEn || undefined,
+    storyEncounterContext: String(options.storyEncounterContext || '')
+      .trim()
+      .slice(0, 3500) || undefined,
+  })
+
+  await cardStore.add(bootstrapNewSrsCard(wordId, addedAt))
+
+  await tx.done
+  return { wordId, alreadyExists: false }
+}
+
+/**
+ * Word saved from Frequency Tales reader when it is **not** one of the red queue targets
+ * (micro-lesson on the word row; badge "Tales" in Frequency Lab list).
+ */
+export async function addWordFromFrequencyTale(german, translation, options = {}) {
+  const db = await getDB()
+  const g = String(german || '').trim()
+  if (!g) return { wordId: null, alreadyExists: true, error: 'empty' }
+  const normalizedKey = normalizeGerman(g)
+
+  const tx = db.transaction(['words', 'srs_cards'], 'readwrite')
+  const wordStore = tx.objectStore('words')
+  const cardStore = tx.objectStore('srs_cards')
+
+  const existing = await wordStore.index('normalizedKey').get(normalizedKey)
+  if (existing) {
+    await tx.done
+    return { wordId: existing.id, alreadyExists: true }
+  }
+
+  const rawLesson = options.microLesson && typeof options.microLesson === 'object' ? options.microLesson : null
+  const microLesson = rawLesson
+    ? {
+        glossShort: String(rawLesson.glossShort || '').trim().slice(0, 240),
+        fullMeaning: String(rawLesson.fullMeaning || '').trim().slice(0, 2500),
+        sentences: Array.isArray(rawLesson.sentences)
+          ? rawLesson.sentences
+              .slice(0, 8)
+              .map((s) => ({
+                de: String(s?.de || '').trim(),
+                en: String(s?.en || '').trim(),
+              }))
+              .filter((s) => s.de)
+          : [],
+        storyDe: String(rawLesson.storyDe || '').trim(),
+        storyEn: String(rawLesson.storyEn || '').trim(),
+      }
+    : null
+
+  const variantsRaw = Array.isArray(options.variants) ? options.variants : []
+  const variants = [...new Set(variantsRaw.map((x) => String(x || '').trim()).filter(Boolean))].slice(0, 12)
+
+  const cueFromLesson =
+    microLesson?.sentences?.[0]?.en != null ? String(microLesson.sentences[0].en).trim() : ''
+  const cueEn =
+    String(options.flashCueSentenceEn || options.cueSentenceEn || '').trim() || cueFromLesson
+
+  const addedAt = Date.now()
+  const wordId = await wordStore.add({
+    german: g,
+    translation: (translation || '').trim() || 'Imported',
+    normalizedKey,
+    addedAt,
+    source: 'frequency_tales',
+    learnSource: 'frequency_tales',
+    frequencyRank: null,
+    gender: null,
+    plural: null,
+    example: options.example || null,
+    variants,
+    frequencyTier: Math.min(2, getFrequencyTier(g) || 1),
+    encounterCount: 0,
+    storyClozes: [],
+    isHard: false,
+    microLesson,
+    flashCueSentenceEn: cueEn || undefined,
+    storyEncounterContext: String(options.storyEncounterContext || '')
+      .trim()
+      .slice(0, 3500) || undefined,
   })
 
   await cardStore.add(bootstrapNewSrsCard(wordId, addedAt))
@@ -539,10 +635,27 @@ export async function getFlashcardExamplePairs(word) {
 export async function attachFlashExamplesToCards(cards) {
   if (!Array.isArray(cards) || !cards.length) return []
   return Promise.all(
-    cards.map(async (c) => ({
-      ...c,
-      flashExamples: await getFlashcardExamplePairs(c.word),
-    }))
+    cards.map(async (c) => {
+      const w = c.word
+      const flashExamples = await getFlashcardExamplePairs(w)
+      let flashUseCaseText = String(w?.flashUseCaseNote || '').trim()
+      if (!flashUseCaseText) {
+        flashUseCaseText = String(w?.microLesson?.fullMeaning || '').trim()
+      }
+      if (!flashUseCaseText && w?.frequencyRank != null && Number.isFinite(Number(w.frequencyRank))) {
+        try {
+          const row = await getFrequencyLesson(Number(w.frequencyRank))
+          flashUseCaseText = String(row?.lesson?.fullMeaning || '').trim()
+        } catch {
+          /* ignore */
+        }
+      }
+      return {
+        ...c,
+        flashExamples,
+        flashUseCaseText: flashUseCaseText || null,
+      }
+    })
   )
 }
 
@@ -565,7 +678,9 @@ export async function getWordsFromFrequencySource() {
       w.learnSource === 'frequency' ||
       w.source === 'frequency' ||
       w.learnSource === 'story' ||
-      w.source === 'story'
+      w.source === 'story' ||
+      w.learnSource === 'frequency_tales' ||
+      w.source === 'frequency_tales'
   )
 }
 
@@ -763,7 +878,7 @@ export async function getNewCards(limit = 15) {
 export async function updateCardAfterReview(wordId, rating) {
   const db = await getDB()
   const card = await safeGet(db, 'srs_cards', wordId, 'updateCardAfterReview')
-  if (!card) return
+  if (!card) return null
   const normalized = {
     ...card,
     stability: card.stability ?? 0,
@@ -773,6 +888,7 @@ export async function updateCardAfterReview(wordId, rating) {
   }
   const updated = updateCard(normalized, rating, { retentionTarget: readRetentionTarget() })
   await safePut(db, 'srs_cards', updated, 'updateCardAfterReview')
+  return updated
 }
 
 /**
@@ -979,8 +1095,17 @@ export async function getFrequencyReviewStories() {
 
 // ─── Daily Sessions ───────────────────────────────────────────────────────────
 
+/** Local calendar date (YYYY-MM-DD). Daily session keys must match dashboard/heatmap "yesterday" lookups. */
+export function getLocalCalendarYmd(d = new Date()) {
+  const dt = d instanceof Date ? d : new Date(d)
+  const y = dt.getFullYear()
+  const m = String(dt.getMonth() + 1).padStart(2, '0')
+  const day = String(dt.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 function todayStr() {
-  return new Date().toISOString().split('T')[0]
+  return getLocalCalendarYmd()
 }
 
 const DEFAULT_DAILY_SESSION = {
@@ -988,6 +1113,8 @@ const DEFAULT_DAILY_SESSION = {
   newWordsLearned: 0,
   frequencyWordsLearned: 0,
   storiesRead: 0,
+  /** Chapter advances in Frequency Tales only (coach + trail; complements storiesRead). */
+  frequencyTalesChaptersRead: 0,
   grammarExercises: 0,
   shadowingMinutes: 0,
   productionSubmissions: 0,
@@ -999,6 +1126,8 @@ const DEFAULT_DAILY_SESSION = {
   /** Engaged-tab seconds attributed to the current route (subset of appActiveSeconds after tracking exists). */
   flashcardsEngagedSeconds: 0,
   frequencyEngagedSeconds: 0,
+  /** Frequency Tales page (`/frequency-tales`) — graded frequency-target stories (separate from Story Studio). */
+  frequencyTalesEngagedSeconds: 0,
   storyEngagedSeconds: 0,
   grammarEngagedSeconds: 0,
   speakEngagedSeconds: 0,
@@ -1054,6 +1183,7 @@ export async function addTimerMinutesToSession(pageKey, minutes) {
 const ENGAGED_ROUTE_TO_FIELD = {
   flashcards: 'flashcardsEngagedSeconds',
   frequency: 'frequencyEngagedSeconds',
+  frequency_tales: 'frequencyTalesEngagedSeconds',
   story: 'storyEngagedSeconds',
   grammar: 'grammarEngagedSeconds',
   speak: 'speakEngagedSeconds',
@@ -1067,6 +1197,7 @@ export function pathnameToEngagedRouteKey(pathname) {
   const p = String(pathname || '')
   if (p === '/' || p === '') return 'dashboard'
   if (p.startsWith('/flashcards')) return 'flashcards'
+  if (p.startsWith('/frequency-tales')) return 'frequency_tales'
   if (p.startsWith('/frequency')) return 'frequency'
   if (p.startsWith('/story')) return 'story'
   if (p.startsWith('/grammar')) return 'grammar'
@@ -1122,11 +1253,13 @@ function engagedMinutesFromSeconds(sec) {
 export function getSessionStudyBreakdown(session) {
   if (!session) return []
   const totalMin = getTotalTrackedMinutesToday(session)
+  const shadowModeMinutes = Math.max(session.storyShadowMinutes || 0, session.shadowingMinutes || 0)
 
   const appTotalMin = (session.appActiveSeconds || 0) / 60
   const routedSumMin =
     engagedMinutesFromSeconds(session.flashcardsEngagedSeconds) +
     engagedMinutesFromSeconds(session.frequencyEngagedSeconds) +
+    engagedMinutesFromSeconds(session.frequencyTalesEngagedSeconds) +
     engagedMinutesFromSeconds(session.storyEngagedSeconds) +
     engagedMinutesFromSeconds(session.grammarEngagedSeconds) +
     engagedMinutesFromSeconds(session.speakEngagedSeconds) +
@@ -1145,12 +1278,19 @@ export function getSessionStudyBreakdown(session) {
       minutes: (session.frequencyMinutes || 0) + engagedMinutesFromSeconds(session.frequencyEngagedSeconds),
     },
     {
+      label: 'Frequency Tales',
+      minutes: engagedMinutesFromSeconds(session.frequencyTalesEngagedSeconds),
+    },
+    {
       label: 'Story Studio',
       minutes:
         (session.storyReadMinutes || 0) +
         (session.storyListenMinutes || 0) +
-        (session.storyShadowMinutes || 0) +
         engagedMinutesFromSeconds(session.storyEngagedSeconds),
+    },
+    {
+      label: 'Shadow Mode',
+      minutes: shadowModeMinutes,
     },
     {
       label: 'Grammar Gym',
@@ -1199,13 +1339,22 @@ function addCalendarDayStr(dateStr, deltaDays) {
   return `${y}-${mo}-${da}`
 }
 
+function ymdFromEpochMs(ms) {
+  const n = Number(ms)
+  if (!Number.isFinite(n) || n <= 0) return null
+  return getLocalCalendarYmd(new Date(n))
+}
+
 /**
  * Every calendar day from journey start (localStorage `dr_start_date`, else earliest saved session) through today,
  * merged with `daily_sessions` rows (empty days use defaults).
  */
 export async function getJourneyHistorySessions() {
   const db = await getDB()
-  const allSessions = await safeGetAll(db, 'daily_sessions', 'getJourneyHistorySessions')
+  const [allSessions, allWords] = await Promise.all([
+    safeGetAll(db, 'daily_sessions', 'getJourneyHistorySessions'),
+    safeGetAll(db, 'words', 'getJourneyHistorySessions'),
+  ])
   let startStr = null
   try {
     const ls = localStorage.getItem('dr_start_date')
@@ -1221,16 +1370,34 @@ export async function getJourneyHistorySessions() {
   const endStr = todayStr()
   if (startStr > endStr) startStr = endStr
 
+  const wordsAddedByDate = {}
+  for (const w of allWords) {
+    const key = ymdFromEpochMs(w?.addedAt)
+    if (!key) continue
+    wordsAddedByDate[key] = (wordsAddedByDate[key] || 0) + 1
+  }
+
   const byDate = {}
   for (const s of allSessions) {
     if (!s?.date) continue
-    byDate[s.date] = { ...DEFAULT_DAILY_SESSION, ...s, date: s.date }
+    byDate[s.date] = {
+      ...DEFAULT_DAILY_SESSION,
+      ...s,
+      date: s.date,
+      newWordsAdded: wordsAddedByDate[s.date] || 0,
+    }
   }
 
   const days = []
   let cursor = startStr
   while (cursor <= endStr) {
-    days.push(byDate[cursor] || { date: cursor, ...DEFAULT_DAILY_SESSION })
+    days.push(
+      byDate[cursor] || {
+        date: cursor,
+        ...DEFAULT_DAILY_SESSION,
+        newWordsAdded: wordsAddedByDate[cursor] || 0,
+      }
+    )
     cursor = addCalendarDayStr(cursor, 1)
   }
   return days

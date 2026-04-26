@@ -6,6 +6,7 @@ import {
   getDueCards,
   getNewCards,
   updateCardAfterReview,
+  getCardForWord,
   updateTodaySession,
   getTodaySession,
   addXP,
@@ -26,11 +27,16 @@ const STAGE = { PRE: 'pre', REVIEW: 'review', POST: 'post' }
 
 /** Fetch all due cards for one session (safety cap so pathological backlogs stay usable). */
 const MAX_DUE_PER_LOAD = 3000
+const SHORT_TERM_REQUEUE_MAX_MS = 15 * 60 * 1000
 
 export default function Flashcards() {
   const navigate = useNavigate()
   const { incrementStreak } = useStreak()
-  const { newCardsPerDay: settingsNewPerDay } = useSettings()
+  const {
+    newCardsPerDay: settingsNewPerDay,
+    speakGermanOnReveal,
+    setSpeakGermanOnReveal,
+  } = useSettings()
   const [stage, setStage] = useState(STAGE.PRE)
   const [dueCards, setDueCards] = useState([])
   const [newCards, setNewCards] = useState([])
@@ -42,9 +48,10 @@ export default function Flashcards() {
   const [sessionStats, setSessionStats] = useState({
     reviewed: 0, correct: 0, xp: 0, startTime: null, streak: 0, maxStreak: 0
   })
-  const [cardMode, setCardMode] = useState('de_to_en')
   const [loading, setLoading] = useState(true)
   const exampleAudioIdxRef = useRef(0)
+  const sessionStartMsRef = useRef(null)
+  const dailyNewWordsCountedRef = useRef(new Set())
 
   const newCardsPerDay = settingsNewPerDay
 
@@ -60,6 +67,15 @@ export default function Flashcards() {
     loadCards()
   }, [])
 
+  const revealAnswer = useCallback(() => {
+    const c = allCards[currentIndex]
+    setIsFlipped(true)
+    if (speakGermanOnReveal) {
+      const g = String(c?.word?.german || '').trim()
+      if (g) germanVoice.speakWord(g)
+    }
+  }, [allCards, currentIndex, speakGermanOnReveal])
+
   const loadCards = async () => {
     const cardStats = await getCardStats()
     const dueLimit = Math.min(Math.max(cardStats.due, 1), MAX_DUE_PER_LOAD)
@@ -72,6 +88,14 @@ export default function Flashcards() {
     setStats({ due: cardStats.due, new: cardStats.new })
     setLoading(false)
   }
+
+  const handleFlashcardWordSaved = useCallback((wordId, patch) => {
+    setAllCards((prev) =>
+      prev.map((c) =>
+        c.word?.id === wordId ? { ...c, word: { ...c.word, ...patch } } : c
+      )
+    )
+  }, [])
 
   const startSession = async () => {
     let cards = []
@@ -90,9 +114,10 @@ export default function Flashcards() {
     const marked = cards.map((c) => ({ ...c, _sessionStartedAsNew: c.state === 'new' }))
     const withExamples = await attachFlashExamplesToCards(marked)
     setAllCards(withExamples)
-    setCardMode('de_to_en')
     setCurrentIndex(0)
     setIsFlipped(false)
+    sessionStartMsRef.current = Date.now()
+    dailyNewWordsCountedRef.current = new Set()
     setSessionStats({ reviewed: 0, correct: 0, xp: 0, startTime: Date.now(), streak: 0, maxStreak: 0 })
     setStage(STAGE.REVIEW)
     incrementStreak()
@@ -102,9 +127,33 @@ export default function Flashcards() {
     const card = allCards[currentIndex]
     if (!card) return
 
-    await updateCardAfterReview(card.wordId, rating)
+    const updatedCard = await updateCardAfterReview(card.wordId, rating)
+    if (!updatedCard) return
 
     const isCorrect = rating >= 3
+    const newReviewed = sessionStats.reviewed + 1
+    const newCorrect = sessionStats.correct + (isCorrect ? 1 : 0)
+    const now = Date.now()
+    const shouldRequeueShortTerm =
+      !!updatedCard &&
+      (updatedCard.state === 'learning' || updatedCard.state === 'relearning') &&
+      updatedCard.nextReview > now &&
+      updatedCard.nextReview - now <= SHORT_TERM_REQUEUE_MAX_MS
+
+    if (shouldRequeueShortTerm) {
+      const latest = (await getCardForWord(card.wordId)) || updatedCard
+      setAllCards(prev => ([
+        ...prev,
+        {
+          ...latest,
+          word: card.word,
+          flashExamples: card.flashExamples,
+          _sessionStartedAsNew: false,
+          _shortTermRequeue: true,
+        },
+      ]))
+    }
+
     const xpEarned = rating === 4 ? 10 : isCorrect ? 5 : 1
     const newStreak = isCorrect ? sessionStats.streak + 1 : 0
 
@@ -117,22 +166,31 @@ export default function Flashcards() {
       maxStreak: Math.max(prev.maxStreak, newStreak),
     }))
 
+    const dailyRow = await getTodaySession()
+    const dailyPatch = {
+      flashcardsReviewed: (dailyRow.flashcardsReviewed || 0) + 1,
+    }
+    if (card._sessionStartedAsNew && !dailyNewWordsCountedRef.current.has(card.wordId)) {
+      dailyNewWordsCountedRef.current.add(card.wordId)
+      dailyPatch.newWordsLearned = (dailyRow.newWordsLearned || 0) + 1
+    }
+    await updateTodaySession(dailyPatch)
+
     await addXP(xpEarned)
     showXPToast(xpEarned)
 
     const next = currentIndex + 1
-    if (next >= allCards.length) {
-      // Session complete
-      const timeMin = Math.round((Date.now() - sessionStats.startTime) / 60000)
+    const queueLengthAfterUpdate = allCards.length + (shouldRequeueShortTerm ? 1 : 0)
+    if (next >= queueLengthAfterUpdate) {
+      // Session complete — flashcardsReviewed / newWordsLearned already updated per rating
+      const startMs = sessionStartMsRef.current ?? sessionStats.startTime
+      const timeMin = Math.round((Date.now() - startMs) / 60000)
       const session = await getTodaySession()
-      const newCardsStudiedInSession = allCards.filter((c) => c._sessionStartedAsNew).length
       await updateTodaySession({
-        flashcardsReviewed: (session.flashcardsReviewed || 0) + allCards.length,
-        newWordsLearned: (session.newWordsLearned || 0) + newCardsStudiedInSession,
-        minutesStudied: (session.minutesStudied || 0) + timeMin,
+        minutesStudied: (session.minutesStudied || 0) + Math.max(0, timeMin),
       })
       // Perfect session bonus
-      if (sessionStats.correct + (isCorrect ? 1 : 0) === allCards.length) {
+      if (newCorrect === newReviewed) {
         await addXP(50)
         showXPToast(50, 'Perfect session!')
       }
@@ -145,9 +203,6 @@ export default function Flashcards() {
 
     setCurrentIndex(next)
     setIsFlipped(false)
-    if (next % 3 === 0) {
-      setCardMode(m => m === 'de_to_en' ? 'en_to_de' : 'de_to_en')
-    }
   }, [allCards, currentIndex, sessionStats])
 
   useEffect(() => {
@@ -159,6 +214,7 @@ export default function Flashcards() {
       if (!g) return
 
       if (e.key === ' ') {
+        if (!isFlipped) return
         e.preventDefault()
         if (germanVoice.isSpeaking()) {
           germanVoice.stop()
@@ -182,7 +238,7 @@ export default function Flashcards() {
       }
       if (e.key === 'Enter') {
         e.preventDefault()
-        if (!isFlipped) setIsFlipped(true)
+        if (!isFlipped) revealAnswer()
         return
       }
       if (isFlipped && ['1', '2', '3', '4'].includes(e.key)) {
@@ -191,7 +247,7 @@ export default function Flashcards() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [stage, isFlipped, handleRate, allCards, currentIndex])
+  }, [stage, isFlipped, handleRate, allCards, currentIndex, revealAnswer])
 
   if (loading) {
     return (
@@ -288,7 +344,9 @@ export default function Flashcards() {
             </Button>
           )}
 
-          <p className="text-xs text-slate-600 mb-2">Tip: Space = hear German · Enter = show answer · 1–4 = rate (after flip)</p>
+          <p className="text-xs text-slate-600 mb-2">
+            Tip: Enter = show answer · Space = hear German (after flip) · 1–4 = rate · Use “Speak on reveal” during review for auto pronunciation
+          </p>
         </div>
       </div>
       </>
@@ -392,9 +450,22 @@ export default function Flashcards() {
             />
           </div>
         </div>
-        <div className="flex items-center gap-1 text-sm font-semibold text-brand-400">
-          <Zap size={14} className="fill-current" />
-          <span>{sessionStats.xp}</span>
+        <div className="flex items-center gap-3 shrink-0">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={speakGermanOnReveal}
+              onChange={(e) => setSpeakGermanOnReveal(e.target.checked)}
+              className="rounded border-surface-600 bg-surface-800 text-brand-500 focus:ring-brand-500 focus:ring-offset-0"
+            />
+            <span className="text-[11px] text-slate-400 leading-tight max-w-[7.5rem] sm:max-w-none">
+              Speak on reveal
+            </span>
+          </label>
+          <div className="flex items-center gap-1 text-sm font-semibold text-brand-400">
+            <Zap size={14} className="fill-current" />
+            <span>{sessionStats.xp}</span>
+          </div>
         </div>
       </div>
 
@@ -409,9 +480,10 @@ export default function Flashcards() {
         >
           <FlashCard
             card={card}
-            mode={cardMode}
+            mode="en_to_de"
             isFlipped={isFlipped}
-            onFlip={() => setIsFlipped(true)}
+            onFlip={revealAnswer}
+            onWordSaved={handleFlashcardWordSaved}
           />
         </motion.div>
       </AnimatePresence>

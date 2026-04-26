@@ -33,7 +33,14 @@ function parseExplanation(text) {
   return result
 }
 
-export default function WordPopup({ word, context, onClose, onSaved }) {
+export default function WordPopup({
+  word,
+  context,
+  onClose,
+  onSaved,
+  /** If set, called instead of addWordFromStory — e.g. Frequency Lab ranks + lesson cache */
+  externalVaultSave,
+}) {
   const [explanation, setExplanation] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -153,10 +160,27 @@ export default function WordPopup({ word, context, onClose, onSaved }) {
         ),
       ].slice(0, 12)
 
+      if (typeof externalVaultSave === 'function') {
+        const ok = await externalVaultSave({
+          lemma,
+          gloss,
+          lesson,
+          variants: variantList,
+          surfaceWord: word,
+          context,
+          explanation,
+        })
+        if (ok === false) return
+        setSaved(true)
+        onSaved?.()
+        return
+      }
+
       const res = await addWordFromStory(lemma, gloss, {
         microLesson: lesson,
         variants: variantList,
         example: firstEx || null,
+        storyEncounterContext: String(context || '').trim().slice(0, 3500) || undefined,
       })
 
       if (res.alreadyExists) {
