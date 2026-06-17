@@ -54,7 +54,7 @@ export function useSettings() {
   }
 
   const setFrequencyWordsPerDay = (n) => {
-    const v = Math.max(5, Math.min(40, parseInt(n, 10) || 25))
+    const v = Math.max(5, Math.min(50, parseInt(n, 10) || 25))
     localStorage.setItem('dr_frequency_words_per_day', String(v))
     setFrequencyWordsPerDayState(v)
   }

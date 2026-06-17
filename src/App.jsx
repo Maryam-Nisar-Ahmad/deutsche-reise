@@ -12,6 +12,8 @@ import Onboarding from './pages/Onboarding'
 import FrequencyLab from './pages/FrequencyLab'
 import FrequencyTales from './pages/FrequencyTales'
 import HardFlashcardsPrint from './pages/HardFlashcardsPrint'
+import { maybeAutoBackupToSupabase } from './lib/supabaseBackup.js'
+
 export default function App() {
   const [onboarded, setOnboarded] = useState(null)
 
@@ -42,6 +44,11 @@ export default function App() {
     } catch (error) {
       console.warn('[App] Failed to re-affirm dr_onboarded flag', error)
     }
+  }, [onboarded])
+
+  useEffect(() => {
+    if (!onboarded) return
+    maybeAutoBackupToSupabase()
   }, [onboarded])
 
   if (onboarded === null) {

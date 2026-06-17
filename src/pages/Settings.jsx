@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import {
   Key, Eye, EyeOff, Volume2, Sliders, Calendar,
   Download, Upload, Trash2, AlertTriangle, CheckCircle2,
-  RefreshCw, Loader2, Bell, BookMarked,
+  RefreshCw, Loader2, Bell, BookMarked, Cloud, Smartphone, Mail, LogOut,
 } from 'lucide-react'
 import { useSettings } from '../hooks/useSettings'
 import { useVoice } from '../hooks/useVoice'
@@ -13,6 +13,15 @@ import {
   getAllWords, getWordCount, initDB, importWords, applyAIFamilyMerge,
   exportFullBackup, importFullBackup,
 } from '../lib/db.js'
+import { getSupabaseClient, isSupabaseConfigured } from '../lib/supabaseClient.js'
+import {
+  getSupabaseBackupUiState,
+  syncSupabaseBackupNow,
+  listBackupSnapshots,
+  fetchSnapshotPayloadById,
+  MAX_SNAPSHOTS_PER_USER,
+} from '../lib/supabaseBackup.js'
+import { signOutCloud } from '../lib/supabaseAuth.js'
 import { groupWordFamiliesWithAI } from '../lib/wordGrouper.js'
 import Button from '../components/shared/Button'
 import Modal from '../components/shared/Modal'
@@ -60,6 +69,36 @@ export default function Settings() {
   const [regroupResult, setRegroupResult] = useState(null)
   const [fullRestoreConfirm, setFullRestoreConfirm] = useState(false)
   const [pendingFullBackupFile, setPendingFullBackupFile] = useState(null)
+  /** 'device' | 'cloud' — full restore confirm copy */
+  const [pendingRestoreSource, setPendingRestoreSource] = useState(null)
+  const [pendingCloudRestoreUpdatedAt, setPendingCloudRestoreUpdatedAt] = useState(null)
+  const [importBackupChoiceOpen, setImportBackupChoiceOpen] = useState(false)
+  const [cloudImportBusy, setCloudImportBusy] = useState(false)
+  const [snapshotPickerOpen, setSnapshotPickerOpen] = useState(false)
+  const [cloudSnapshots, setCloudSnapshots] = useState([])
+  const [restoringSnapshotId, setRestoringSnapshotId] = useState(null)
+  const importFileInputRef = useRef(null)
+  const supabaseCloudEnabled = isSupabaseConfigured()
+  const [cloudBackupUi, setCloudBackupUi] = useState(() => getSupabaseBackupUiState())
+  const [cloudSyncBusy, setCloudSyncBusy] = useState(false)
+  const [cloudSession, setCloudSession] = useState(null)
+  const [cloudEmail, setCloudEmail] = useState('')
+  const [cloudPassword, setCloudPassword] = useState('')
+  const [authBusy, setAuthBusy] = useState(false)
+  const [magicLinkSent, setMagicLinkSent] = useState(false)
+
+  const refreshCloudBackupUi = () => setCloudBackupUi(getSupabaseBackupUiState())
+
+  useEffect(() => {
+    if (!supabaseCloudEnabled) return
+    const supabase = getSupabaseClient()
+    if (!supabase) return
+    supabase.auth.getSession().then(({ data: { session } }) => setCloudSession(session))
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCloudSession(session)
+    })
+    return () => subscription.unsubscribe()
+  }, [supabaseCloudEnabled])
 
   useEffect(() => {
     const checkDb = async () => {
@@ -144,6 +183,137 @@ export default function Settings() {
     URL.revokeObjectURL(url)
   }
 
+  const handleSupabaseSyncNow = async () => {
+    setCloudSyncBusy(true)
+    try {
+      const r = await syncSupabaseBackupNow()
+      refreshCloudBackupUi()
+      if (r?.skipped) {
+        if (r.reason === 'not_signed_in') {
+          alert('Sign in to your cloud account above first.')
+        } else         if (r.reason === 'empty_wipe_guard') {
+          alert('Backup skipped: local data looks empty, but your cloud already has snapshots — we did not upload, so your history stays safe.')
+        } else if (r.reason === 'empty_nothing_to_save') {
+          alert('Nothing to upload yet (empty library). Add some progress first.')
+        }
+      }
+    } catch (err) {
+      refreshCloudBackupUi()
+      alert(err?.message || 'Cloud backup failed. Check the browser console and Supabase settings.')
+    }
+    setCloudSyncBusy(false)
+  }
+
+  const handleCloudSignUp = async () => {
+    const supabase = getSupabaseClient()
+    if (!supabase) return
+    const email = cloudEmail.trim()
+    if (!email || cloudPassword.length < 6) {
+      alert('Enter email and password (at least 6 characters).')
+      return
+    }
+    setAuthBusy(true)
+    const { error } = await supabase.auth.signUp({ email, password: cloudPassword })
+    setAuthBusy(false)
+    if (error) alert(error.message)
+    else alert('Account created. Confirm your email if your project requires it, then sign in.')
+  }
+
+  const handleCloudSignIn = async () => {
+    const supabase = getSupabaseClient()
+    if (!supabase) return
+    const email = cloudEmail.trim()
+    if (!email || !cloudPassword) {
+      alert('Enter email and password.')
+      return
+    }
+    setAuthBusy(true)
+    const { error } = await supabase.auth.signInWithPassword({ email, password: cloudPassword })
+    setAuthBusy(false)
+    if (error) alert(error.message)
+  }
+
+  const handleCloudMagicLink = async () => {
+    const supabase = getSupabaseClient()
+    if (!supabase) return
+    const email = cloudEmail.trim()
+    if (!email) {
+      alert('Enter your email.')
+      return
+    }
+    setAuthBusy(true)
+    setMagicLinkSent(false)
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: `${window.location.origin}/settings` },
+    })
+    setAuthBusy(false)
+    if (error) alert(error.message)
+    else setMagicLinkSent(true)
+  }
+
+  const handleCloudSignOut = async () => {
+    setAuthBusy(true)
+    try {
+      await signOutCloud()
+      setMagicLinkSent(false)
+    } catch (e) {
+      alert(e?.message || 'Sign out failed.')
+    }
+    setAuthBusy(false)
+  }
+
+  function formatSnapshotRow(iso) {
+    const d = new Date(iso)
+    if (!Number.isFinite(d.getTime())) return String(iso)
+    const diff = Date.now() - d.getTime()
+    const days = Math.floor(diff / 86400000)
+    if (days <= 0) {
+      return `Today · ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`
+    }
+    if (days === 1) return `Yesterday · ${d.toLocaleString()}`
+    return `${days} days ago · ${d.toLocaleString()}`
+  }
+
+  const handleOpenCloudSnapshotPicker = async () => {
+    const supabase = getSupabaseClient()
+    if (!supabase) return
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) {
+      alert('Sign in with the same cloud email you use on other devices, then try again.')
+      return
+    }
+    setCloudImportBusy(true)
+    try {
+      const rows = await listBackupSnapshots()
+      setCloudSnapshots(rows)
+      setImportBackupChoiceOpen(false)
+      setSnapshotPickerOpen(true)
+    } catch (err) {
+      alert(err?.message || 'Could not list cloud backups.')
+    }
+    setCloudImportBusy(false)
+  }
+
+  const handleRestoreCloudSnapshot = async (snapshotId) => {
+    setRestoringSnapshotId(snapshotId)
+    try {
+      const { payload, createdAt } = await fetchSnapshotPayloadById(snapshotId)
+      if (payload.format !== 'deutsche-reise-full-backup') {
+        alert('Invalid snapshot format.')
+        return
+      }
+      setSnapshotPickerOpen(false)
+      setPendingFullBackupFile(JSON.stringify(payload))
+      setPendingRestoreSource('cloud')
+      setPendingCloudRestoreUpdatedAt(createdAt)
+      setFullRestoreConfirm(true)
+    } catch (err) {
+      alert(err?.message || 'Could not load snapshot.')
+    }
+    setRestoringSnapshotId(null)
+  }
+
   const handleImportFilePick = (e) => {
     const file = e.target.files[0]
     if (!file) return
@@ -153,6 +323,8 @@ export default function Settings() {
         const data = JSON.parse(ev.target.result)
         if (data.format === 'deutsche-reise-full-backup') {
           setPendingFullBackupFile(ev.target.result)
+          setPendingRestoreSource('device')
+          setPendingCloudRestoreUpdatedAt(null)
           setFullRestoreConfirm(true)
           e.target.value = ''
           return
@@ -183,11 +355,18 @@ export default function Settings() {
       await importFullBackup(pendingFullBackupFile)
       setFullRestoreConfirm(false)
       setPendingFullBackupFile(null)
+      setPendingRestoreSource(null)
+      setPendingCloudRestoreUpdatedAt(null)
       alert('Full restore complete. The app will reload.')
       window.location.reload()
     } catch (err) {
       alert(err?.message || 'Full restore failed.')
     }
+  }
+
+  const openImportFromDevice = () => {
+    setImportBackupChoiceOpen(false)
+    requestAnimationFrame(() => importFileInputRef.current?.click())
   }
 
   const handleResetProgress = async () => {
@@ -423,13 +602,11 @@ export default function Settings() {
           <div className="flex items-center gap-3">
             <input
               type="number"
-              min={5}
-              max={30}
               value={newCardsPerDay}
-              onChange={e => setNewCardsPerDay(Math.min(30, Math.max(5, parseInt(e.target.value) || 15)))}
+              onChange={e => setNewCardsPerDay(parseInt(e.target.value, 10) || 15)}
               className="input-field w-24 text-center"
             />
-            <span className="text-sm text-slate-400">(5–30)</span>
+            <span className="text-sm text-slate-400">(any number)</span>
           </div>
         </div>
 
@@ -439,12 +616,12 @@ export default function Settings() {
             <input
               type="number"
               min={5}
-              max={40}
+              max={50}
               value={frequencyWordsPerDay}
               onChange={e => setFrequencyWordsPerDay(parseInt(e.target.value, 10) || 25)}
               className="input-field w-24 text-center"
             />
-            <span className="text-sm text-slate-400">words (5–40)</span>
+            <span className="text-sm text-slate-400">words (5–50)</span>
           </div>
         </div>
 
@@ -592,6 +769,111 @@ export default function Settings() {
             <span className="text-white font-medium">{wordsStored.toLocaleString()}</span>
           </div>
         </div>
+        {supabaseCloudEnabled && (
+          <>
+            <div className="rounded-xl border border-surface-700 bg-surface-900/70 p-3 text-sm space-y-3">
+              <div className="flex items-center gap-2 text-slate-300 font-medium">
+                <Mail size={16} className="text-brand-400 shrink-0" />
+                Cloud account
+              </div>
+              <p className="text-slate-500 text-xs">
+                Use the <strong className="text-slate-400">same email</strong> on every device (only env vars differ). Backups are stored under your account, not an anonymous browser session.
+              </p>
+              {cloudSession?.user?.email ? (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-slate-300">
+                    Signed in as <span className="text-white font-medium">{cloudSession.user.email}</span>
+                  </span>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    loading={authBusy}
+                    icon={<LogOut size={14} />}
+                    onClick={handleCloudSignOut}
+                  >
+                    Sign out
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <input
+                    type="email"
+                    autoComplete="email"
+                    placeholder="Email"
+                    value={cloudEmail}
+                    onChange={(e) => setCloudEmail(e.target.value)}
+                    className="w-full rounded-xl border border-surface-600 bg-surface-950 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-brand-500 focus:outline-none"
+                  />
+                  <input
+                    type="password"
+                    autoComplete="current-password"
+                    placeholder="Password (min 6)"
+                    value={cloudPassword}
+                    onChange={(e) => setCloudPassword(e.target.value)}
+                    className="w-full rounded-xl border border-surface-600 bg-surface-950 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-brand-500 focus:outline-none"
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="secondary" size="sm" loading={authBusy} onClick={handleCloudSignUp}>
+                      Create account
+                    </Button>
+                    <Button variant="secondary" size="sm" loading={authBusy} onClick={handleCloudSignIn}>
+                      Sign in
+                    </Button>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-slate-400"
+                    loading={authBusy}
+                    onClick={handleCloudMagicLink}
+                  >
+                    Email me a magic link
+                  </Button>
+                  {magicLinkSent && (
+                    <p className="text-xs text-green-400">Check your inbox for the link (same tab will open Settings when done).</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="rounded-xl border border-surface-700 bg-surface-900/70 p-3 text-sm space-y-2">
+              <div className="flex items-center gap-2 text-slate-300 font-medium">
+                <Cloud size={16} className="text-brand-400 shrink-0" />
+                Cloud backup (Supabase)
+              </div>
+              <p className="text-slate-500 text-xs">
+                Adds a <strong className="text-slate-400">new snapshot</strong> each time (keeps history; older snapshots are removed only after {MAX_SNAPSHOTS_PER_USER} are stored). Auto-upload when signed in and it has been 24h since the last successful sync — never replaces older snapshots with empty data after data loss.
+              </p>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-slate-400">
+                  Last cloud sync:{' '}
+                  <span className="text-slate-200">
+                    {cloudBackupUi.lastExportAt
+                      ? new Date(cloudBackupUi.lastExportAt).toLocaleString()
+                      : '—'}
+                  </span>
+                </div>
+                <Button
+                  onClick={handleSupabaseSyncNow}
+                  variant="secondary"
+                  size="sm"
+                  loading={cloudSyncBusy}
+                  disabled={!cloudSession}
+                  icon={<Cloud size={14} />}
+                >
+                  {cloudSyncBusy ? 'Syncing…' : 'Sync to cloud now'}
+                </Button>
+              </div>
+              {!cloudSession && (
+                <p className="text-xs text-amber-400/90">Sign in above to enable sync and snapshot history.</p>
+              )}
+              {cloudBackupUi.lastError && (
+                <p className="text-xs text-red-400/90">
+                  Last error: {cloudBackupUi.lastError}
+                </p>
+              )}
+            </div>
+          </>
+        )}
         <div className="flex flex-wrap gap-3">
           <Button
             onClick={handleExportFullBackup}
@@ -610,13 +892,21 @@ export default function Settings() {
             Export words only
           </Button>
 
-          <label className="cursor-pointer">
-            <input type="file" accept=".json" onChange={handleImportFilePick} className="hidden" />
-            <div className="flex items-center gap-2 px-3 py-2 bg-surface-800 hover:bg-surface-700 text-slate-300 hover:text-white text-sm font-semibold rounded-xl border border-surface-700 hover:border-surface-600 transition-all cursor-pointer">
-              <Upload size={14} />
-              Import backup
-            </div>
-          </label>
+          <input
+            ref={importFileInputRef}
+            type="file"
+            accept=".json"
+            onChange={handleImportFilePick}
+            className="hidden"
+          />
+          <Button
+            onClick={() => setImportBackupChoiceOpen(true)}
+            variant="secondary"
+            size="sm"
+            icon={<Upload size={14} />}
+          >
+            Import backup
+          </Button>
 
           <Button
             onClick={() => setResetConfirm(true)}
@@ -637,26 +927,127 @@ export default function Settings() {
           </Button>
         </div>
         <p className="text-xs text-slate-500">
-          Full backup = everything local except the API key. Words only = vocabulary merge. See FIRST_WEEK_GUIDE.txt.
+          Full backup (file or cloud) = all IndexedDB data plus streak/settings keys in localStorage — not your API key.
+          Words only = vocabulary merge. See FIRST_WEEK_GUIDE.txt.
         </p>
       </Section>
+
+      <Modal
+        isOpen={importBackupChoiceOpen}
+        onClose={() => !cloudImportBusy && setImportBackupChoiceOpen(false)}
+        title="Import backup"
+        size="sm"
+      >
+        <p className="text-slate-400 text-sm mb-4">
+          Choose where to load a <strong className="text-slate-200">full backup</strong> from (same content as Export full backup).
+          Cloud: sign in with your backup email, then pick a dated snapshot (restore does not delete other snapshots).
+        </p>
+        <div className="flex flex-col gap-2">
+          <Button
+            variant="secondary"
+            className="justify-start"
+            icon={<Smartphone size={14} />}
+            onClick={openImportFromDevice}
+            disabled={cloudImportBusy}
+          >
+            From device — JSON file
+          </Button>
+          {supabaseCloudEnabled ? (
+            <Button
+              variant="secondary"
+              className="justify-start"
+              icon={<Cloud size={14} />}
+              loading={cloudImportBusy}
+              onClick={handleOpenCloudSnapshotPicker}
+            >
+              From cloud — choose snapshot
+            </Button>
+          ) : (
+            <p className="text-xs text-slate-500 px-1">
+              Cloud import appears when <code className="text-slate-400">VITE_SUPABASE_*</code> env vars are set.
+            </p>
+          )}
+          <Button variant="ghost" onClick={() => setImportBackupChoiceOpen(false)} disabled={cloudImportBusy}>
+            Cancel
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={snapshotPickerOpen}
+        onClose={() => !restoringSnapshotId && setSnapshotPickerOpen(false)}
+        title="Restore from cloud"
+        size="md"
+      >
+        <p className="text-slate-400 text-sm mb-3">
+          Pick a snapshot to restore. Older backups stay in the cloud unless you exceed the retention limit.
+        </p>
+        <div className="max-h-[min(360px,50vh)] overflow-y-auto space-y-2 pr-1">
+          {cloudSnapshots.length === 0 ? (
+            <p className="text-sm text-slate-500">No snapshots yet. Sign in and use &quot;Sync to cloud now&quot; first.</p>
+          ) : (
+            cloudSnapshots.map((row) => (
+              <div
+                key={row.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-surface-700 bg-surface-950/80 px-3 py-2 text-sm"
+              >
+                <div>
+                  <div className="text-slate-200">{formatSnapshotRow(row.created_at)}</div>
+                  <div className="text-xs text-slate-500">
+                    Words {row.word_count?.toLocaleString?.() ?? row.word_count} · SRS {row.srs_count?.toLocaleString?.() ?? row.srs_count} · Stories {row.story_count?.toLocaleString?.() ?? row.story_count}
+                  </div>
+                </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={restoringSnapshotId === row.id}
+                  disabled={!!restoringSnapshotId && restoringSnapshotId !== row.id}
+                  onClick={() => handleRestoreCloudSnapshot(row.id)}
+                >
+                  Restore
+                </Button>
+              </div>
+            ))
+          )}
+        </div>
+        <div className="mt-4 flex justify-end">
+          <Button variant="ghost" onClick={() => setSnapshotPickerOpen(false)} disabled={!!restoringSnapshotId}>
+            Cancel
+          </Button>
+        </div>
+      </Modal>
 
       <Modal
         isOpen={fullRestoreConfirm}
         onClose={() => {
           setFullRestoreConfirm(false)
           setPendingFullBackupFile(null)
+          setPendingRestoreSource(null)
+          setPendingCloudRestoreUpdatedAt(null)
         }}
         title="Replace everything?"
         size="sm"
       >
         <p className="text-slate-300 text-sm mb-4">
           This will <strong className="text-red-300">delete all local progress</strong> and replace it with the backup
-          (words, flashcard intervals, stories, sessions). Your API key in Settings is not changed.
+          (words, flashcard intervals, stories, frequency data, sessions). Your API key in Settings is not changed.
         </p>
+        {pendingRestoreSource === 'cloud' && pendingCloudRestoreUpdatedAt && (
+          <p className="text-slate-400 text-xs mb-4">
+            Cloud backup time: {new Date(pendingCloudRestoreUpdatedAt).toLocaleString()}
+          </p>
+        )}
         <div className="flex gap-2">
           <Button variant="danger" onClick={runFullRestore}>Restore and reload</Button>
-          <Button variant="secondary" onClick={() => { setFullRestoreConfirm(false); setPendingFullBackupFile(null) }}>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setFullRestoreConfirm(false)
+              setPendingFullBackupFile(null)
+              setPendingRestoreSource(null)
+              setPendingCloudRestoreUpdatedAt(null)
+            }}
+          >
             Cancel
           </Button>
         </div>

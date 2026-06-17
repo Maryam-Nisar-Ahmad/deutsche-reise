@@ -1,4 +1,4 @@
-import { vaultContainsGermanLexeme, normalizeGerman } from './wordParser.js'
+import { vaultContainsGermanLexeme, normalizeGerman, germanTextContainsSurface } from './wordParser.js'
 
 const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions'
 const MODEL = 'deepseek-chat'
@@ -113,18 +113,46 @@ function germanWordTokenCount(raw) {
   return (body.match(/[a-zäöüß]+/gi) || []).length
 }
 
-function escapeRegExp(s) {
-  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+function foldLemmaMatch(s) {
+  return normalizeGerman(String(s || ''))
+    .replace(/ä/g, 'a')
+    .replace(/ö/g, 'o')
+    .replace(/ü/g, 'u')
+    .replace(/ß/g, 'ss')
 }
 
-/** Whether headword appears in story (inflection-friendly substring match). */
+/**
+ * Whether a frequency target headword appears in the German story body.
+ * Whole-word match first (avoids false positives like "in" ⊂ "Kind"); then inflection-friendly checks.
+ */
 function lemmaAppearsInGermanStory(raw, headword) {
   const hw = String(headword || '').trim()
   if (!hw) return true
-  const body = stripStorySummariesForLangCheck(raw).toLowerCase()
+  const body = stripStorySummariesForLangCheck(raw)
   const parts = hw.split(/\s+/).filter(Boolean)
-  if (parts.length > 1) return parts.every((p) => body.includes(p.toLowerCase()))
-  return new RegExp(escapeRegExp(hw.toLowerCase()), 'i').test(body)
+  if (parts.length > 1) {
+    return parts.every((p) => germanTextContainsSurface(body, p))
+  }
+
+  if (germanTextContainsSurface(body, hw)) return true
+
+  const lowFold = foldLemmaMatch(hw)
+  const bodyFold = foldLemmaMatch(body)
+  if (lowFold.length >= 5 && bodyFold.includes(lowFold)) return true
+
+  const tokens = bodyFold.match(/[a-zäöüß]+/gi) || []
+  for (const tok of tokens) {
+    const t = tok.toLowerCase()
+    if (t === lowFold) return true
+    if (lowFold.length >= 4 && t.startsWith(lowFold) && t.length <= lowFold.length + 4) return true
+  }
+
+  if (lowFold.length >= 6 && lowFold.endsWith('en')) {
+    const stem = lowFold.slice(0, -2)
+    if (stem.length >= 4 && bodyFold.includes(stem)) return true
+  }
+
+  return false
 }
 
 function analyzeFrequencyStoryDraft(raw, targetEntries) {
@@ -266,6 +294,8 @@ PEDAGOGY:
 - After EACH chapter body, exactly one line: [ENGLISH_SUMMARY: one English sentence]
 - Separate chapters with exactly: ---CHAPTER---
 
+FINAL CHECK (mandatory): Before you return the story, scan the German text only and confirm **each of the ${targets.length} target headwords** (or a natural German inflected form of it) appears **at least once** in the narration or dialogue — not only in chapter titles. If any target is missing, add a short German sentence that uses it before you finish.
+
 Start with "Kapitel 1:"`
 
   let raw = cleanMarkdown(
@@ -293,28 +323,40 @@ CRITICAL FIX: Your draft failed German-language check (too much English in the b
     full = stripStorySummariesForLangCheck(raw)
   }
 
-  const analysis = analyzeFrequencyStoryDraft(raw, targets)
-  const needsRepair =
-    analysis.missing.length > 0 ||
-    analysis.minChapter < 65 ||
-    analysis.avgChapter < 72 ||
-    analysis.chapterCountParsed !== chapterCount
+  let analysis = analyzeFrequencyStoryDraft(raw, targets)
+  let repairAttempt = 0
+  const maxRepairAttempts = 4
 
-  if (needsRepair) {
+  while (repairAttempt < maxRepairAttempts) {
+    const needsRepair =
+      analysis.missing.length > 0 ||
+      analysis.minChapter < 65 ||
+      analysis.avgChapter < 72 ||
+      analysis.chapterCountParsed !== chapterCount
+
+    if (!needsRepair) break
+    repairAttempt += 1
+
+    const missingList = analysis.missing.length ? analysis.missing.join(', ') : '(none — chapter count or length failed)'
+    const urgentMissing =
+      analysis.missing.length > 0 && repairAttempt > 1
+        ? `\nCRITICAL (attempt ${repairAttempt}/${maxRepairAttempts}): These lemmas are STILL absent from German body text — each must appear in narration or dialogue (inflections OK), not only in titles: ${analysis.missing.join('; ')}.\n`
+        : ''
+
     const repairPrompt = `You are rewriting a Frequency Tale that FAILED automatic validation.
 
 PROBLEMS DETECTED:
 - Parsed chapters: ${analysis.chapterCountParsed} (required exactly ${chapterCount})
 - Shortest chapter (German word tokens only): ~${Math.round(analysis.minChapter)} (minimum ~65 required)
 - Average chapter length: ~${Math.round(analysis.avgChapter)} (aim ~85+ words per chapter)
-- Target lemmas missing from the German text (must appear at least once each): ${analysis.missing.length ? analysis.missing.join(', ') : '(none — still expand length)'}
-
+- Target lemmas missing from the German text (must appear at least once each): ${missingList}
+${urgentMissing}
 ORIGINAL DRAFT (fix, do not shorten):
 ${raw}
 
 TASK: Rewrite the COMPLETE story from scratch in the same format.
 - Exactly ${chapterCount} chapters separated by ---CHAPTER---
-- Every target lemma from the list must appear at least once in the German text (inflections OK).
+- Every one of these ${targets.length} target lemmas must appear at least once in the German story body (inflections OK): ${targets.map((t) => `"${String(t.headword || '').trim()}"`).join(', ')}
 - Each chapter German body ≥ **85 words** before its [ENGLISH_SUMMARY: ...] line.
 - Stay **${cefrHint}**: short simple sentences, Präsens, same vocabulary rules as before (vault + targets + function words only).
 
@@ -327,7 +369,7 @@ Start with "Kapitel 1:"`
       await invokeDeepSeek({
         systemPrompt,
         userPrompt: repairPrompt,
-        temperature: 0.35,
+        temperature: repairAttempt >= 3 ? 0.3 : 0.35,
         maxTokens: 8192,
       })
     )
@@ -344,6 +386,8 @@ CRITICAL: The rewrite still failed German-only check. German chapter bodies only
         })
       )
     }
+
+    analysis = analyzeFrequencyStoryDraft(raw, targets)
   }
 
   return raw

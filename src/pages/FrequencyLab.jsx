@@ -174,9 +174,9 @@ export default function FrequencyLab() {
   /** ← Arrow: cycle German audio for words in list order (newest first, same as UI). */
   const freqListAudioIdxRef = useRef(0)
   const dailyGoal = frequencyWordsPerDay
-  /** Same cap as Settings → Frequency Lab words per day (5–40); drives AI sync batch size. */
+  /** Same cap as Settings → Frequency Lab words per day (5–50); drives AI sync batch size. */
   const syncBatchSize = useMemo(
-    () => Math.max(5, Math.min(40, Number(frequencyWordsPerDay) || 25)),
+    () => Math.max(5, Math.min(50, Number(frequencyWordsPerDay) || 25)),
     [frequencyWordsPerDay]
   )
   const cefrHint = useMemo(() => {
@@ -1011,7 +1011,7 @@ export default function FrequencyLab() {
             variant="secondary"
             onClick={handleAiSync}
             disabled={syncing || fullMatchBusy}
-            title="Batch size matches Settings → Frequency Lab words per day (5–40)"
+            title="Batch size matches Settings → Frequency Lab words per day (5–50)"
           >
             {syncing ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
             Next {syncBatchSize} only

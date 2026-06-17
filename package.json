@@ -12,6 +12,7 @@
     "verify": "node scripts/verify-fsrs.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.105.4",
     "clsx": "^2.1.1",
     "framer-motion": "^11.18.2",
     "idb": "^8.0.3",
