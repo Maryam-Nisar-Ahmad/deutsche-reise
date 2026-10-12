@@ -1,0 +1,35 @@
+SAMPLE RESEARCH NOTES (not the original research document)
+
+This is a small, generic placeholder standing in for a longer private research
+document. It exists so the Daily Coach feature has some real, public,
+evidence-based text to ground its advice in when no private research file is
+present. Drop your own longer file at src/data/research.private.txt
+(gitignored) to use real content instead.
+
+Spaced repetition and the forgetting curve: Hermann Ebbinghaus's 1885 work
+showed that newly learned information decays roughly exponentially without
+review, with much of it lost within the first day. Each successful review
+flattens that curve further out, which is the basic mechanism behind spaced
+repetition schedulers (including FSRS, used in this app): reviews are timed
+to land just before a card is likely to be forgotten, not on a fixed
+schedule.
+
+Comprehensible input: Stephen Krashen's input hypothesis argues that language
+acquisition happens most efficiently from input that is understandable but
+slightly above the learner's current level ("i+1"), rather than from
+explicit grammar instruction alone. This motivates reading/listening
+practice pitched just above current vocabulary level rather than material
+that is either trivially easy or overwhelmingly hard.
+
+Output and production: Merrill Swain's output hypothesis suggests that
+producing language (speaking or writing), not just receiving it, forces
+learners to notice gaps in their own knowledge and pushes vocabulary from
+passive recognition toward active recall — part of the motivation for
+dedicated speaking/writing practice alongside reading and flashcards.
+
+Vocabulary coverage: research on lexical coverage (e.g. Nation's work on
+vocabulary size and text coverage) suggests comprehension of everyday text
+improves sharply as known-word coverage approaches the high-90s percent
+range, which is part of the motivation for frequency-ranked vocabulary study
+— learning the most common words first covers the most ground per word
+learned.

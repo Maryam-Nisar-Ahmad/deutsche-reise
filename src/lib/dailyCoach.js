@@ -10,7 +10,16 @@ import {
 } from './db.js'
 import { callDeepSeek } from './deepseek.js'
 import { estimateWeeklyReviewLoad } from './reviewLoad.js'
-import researchFullText from '../../The Science of Reaching B2 German in Seven Months_ Evidence-Based Strategies for Accelerated Language Acquisition.txt?raw'
+import sampleResearchText from '../data/research.sample.txt?raw'
+
+// Private research doc (gitignored) if present, else the public sample above.
+// import.meta.glob (not a static import) so a missing file doesn't break the build.
+const _privateResearch = import.meta.glob('../data/research.private.txt', {
+  eager: true,
+  query: '?raw',
+  import: 'default',
+})
+const researchFullText = Object.values(_privateResearch)[0] || sampleResearchText
 
 export { getLocalCalendarYmd }
 
